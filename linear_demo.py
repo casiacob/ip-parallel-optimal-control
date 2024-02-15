@@ -1,7 +1,6 @@
 import jax.numpy as jnp
 import jax.random
 from optimal_control_problem import ocp
-from jax import lax
 from newton_oc import noc
 import matplotlib.pyplot as plt
 from utils import discretize_dynamics
@@ -14,12 +13,6 @@ def ode(state: jnp.ndarray, control: jnp.ndarray):
     A = jnp.array([[0.0, 1.0], [0.0, 0.0]])
     B = jnp.array([[0.0], [1.0]])
     return A @ state + B @ control
-
-
-# def ode(state: jnp.ndarray, control: jnp.ndarray):
-#     A = jnp.array([[-3., -2.], [1., 0.]])
-#     B = jnp.array([[1.], [0.]])
-#     return A @ state + B @ control
 
 
 step = 0.1
@@ -44,15 +37,6 @@ def total_cost(states: jnp.ndarray, controls: jnp.ndarray):
     return cT + jnp.sum(ct)
 
 
-def compute_states(controls: jnp.ndarray, initial_state: jnp.ndarray):
-    def body(xt, ut):
-        return dynamics(xt, ut), dynamics(xt, ut)
-
-    _, states = lax.scan(body, initial_state, controls)
-    states = jnp.vstack((initial_state, states))
-    return states
-
-
 horizon = 40
 x0 = jnp.array([2.0, 1.0])
 key = jax.random.PRNGKey(1)
@@ -63,5 +47,3 @@ x_noc, u_noc = noc(lqr, u, x0)
 plt.plot(x_noc[:, 0])
 plt.plot(x_noc[:, 1])
 plt.show()
-# plt.plot(u_noc)
-# plt.show()
