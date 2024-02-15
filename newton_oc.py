@@ -32,7 +32,7 @@ def compute_Lagrange_multipliers(ocp, states, controls):
     return lamda_opt
 
 
-def bwd_pass(ocp, states, controls, lamdas):
+def bwd_pass(ocp, states, controls, lamdas, mu):
     def bwd_step(carry, inp):
         Vxx, Vx = carry
         x, u, lamda = inp
@@ -53,7 +53,8 @@ def bwd_pass(ocp, states, controls, lamdas):
 
         Qxx = Q + fx.T @ Vxx @ fx
         Quu = R + fu.T @ Vxx @ fu
-        # Quu = Quu + reg_param * jnp.eye(Quu.shape[0])
+        Quu = Quu + mu * jnp.eye(Quu.shape[0])
+        convex = jnp.all(jnp.linalg.eigvals(Quu) > 0)
         Qxu = M + fx.T @ Vxx @ fu
         Qu = ru + fu.T @ Vx
         Qx = fx.T @ Vx
@@ -61,11 +62,11 @@ def bwd_pass(ocp, states, controls, lamdas):
         k = -jnp.linalg.inv(Quu) @ Qu
         K = -jnp.linalg.inv(Quu) @ Qxu.T
 
-        Vx = k.T @ Quu @ K + k.T @ Qxu.T + Qu @ K + Qx
-        Vxx = K.T @ Quu @ K + 2 * K.T @ Qxu.T + Qxx
+        Vx = Qx - Qu @ jnp.linalg.inv(Quu) @ Qxu.T
+        Vxx = Qxx - Qxu @ jnp.linalg.inv(Quu) @ Qxu.T
         dV = k.T @ Qu + 0.5 * k.T @ Quu @ k
-
-        return (Vxx, Vx), (K, k, dV)
+        # jax.debug.breakpoint()
+        return (Vxx, Vx), (K, k, dV, convex)
 
     VxxN = hessian(ocp.final_cost)(states[-1])
     # VxN = grad(ocp.final_cost)(states[-1])
@@ -75,8 +76,8 @@ def bwd_pass(ocp, states, controls, lamdas):
         (states[:-1], controls, lamdas[1:]),
         reverse=True,
     )
-    Kx, kx, diff_cost = bwd_pass_out
-    return Kx, kx, jnp.sum(diff_cost)
+    Kx, kx, diff_cost, pos_def = bwd_pass_out
+    return Kx, kx, jnp.sum(diff_cost), jnp.all(pos_def)
 
 
 def fwd_pass(ocp, states, controls, gain, ffgain):
@@ -99,30 +100,53 @@ def fwd_pass(ocp, states, controls, gain, ffgain):
 
 def noc(ocp, controls, initial_state):
     states = compute_states(ocp.dynamics, controls, initial_state)
+    mu0 = 1.
+    nu0 = 2.0
 
     def while_body(val):
-        x, u, t = val
-        jax.debug.print("Iteration:    {x}", x=t)
-        jax.debug.print("cost:         {x}", x=ocp.total_cost(x, u))
+        x, u, _, t, mu, nu = val
+
+        cost = ocp.total_cost(x, u)
+
+        jax.debug.print("Iteration:     {x}", x=t)
+        jax.debug.print("cost:         {x}", x=cost)
+
         l = compute_Lagrange_multipliers(ocp, x, u)
+        K, k, p_red, bp_feasible = bwd_pass(ocp, x, u, l, mu)
+        temp_x, temp_u = fwd_pass(ocp, x, u, K, k)
 
-        K, k, dv = bwd_pass(ocp, x, u, l)
+        new_cost = ocp.total_cost(temp_x, temp_u)
+        jax.debug.print("new cost:     {x}", x=new_cost)
+        jax.debug.print("bp feasible:  {x}", x=bp_feasible)
 
-        x, u = fwd_pass(ocp, x, u, K, k)
-        jax.debug.print("new cost:     {x}", x=ocp.total_cost(x, u))
+        a_red = new_cost - cost
+        gain_ratio = a_red / p_red
+
+        accept_cond = jnp.logical_and(gain_ratio > 0, bp_feasible)
+        mu = jnp.where(
+            accept_cond,
+            mu * jnp.maximum(1.0 / 3.0, 1.0 - (2.0 * gain_ratio - 1.0) ** 3),
+            mu * nu,
+        )
+        nu = jnp.where(accept_cond, 2.0, 2 * nu)
+        x = jnp.where(accept_cond, temp_x, x)
+        u = jnp.where(accept_cond, temp_u, u)
+
         t = t + 1
-        # jax.debug.breakpoint()
-
-        return x, u, t
+        jax.debug.print("---------------------------------")
+        return x, u, a_red, t, mu, nu
 
     def while_cond(val):
-        _, _, t = val
-        return t < 400
+        _, _, a_red, t, _, _ = val
+        return jnp.abs(a_red) > 1e-8
 
     (
         opt_x,
         opt_u,
         _,
-    ) = lax.while_loop(while_cond, while_body, (states, controls, 0))
+        _,
+        _,
+        _,
+    ) = lax.while_loop(while_cond, while_body, (states, controls, 1e10, 0, mu0, nu0))
 
     return opt_x, opt_u

@@ -1,5 +1,4 @@
 from typing import NamedTuple, Callable
-import jax.numpy as jnp
 
 
 class ocp(NamedTuple):
