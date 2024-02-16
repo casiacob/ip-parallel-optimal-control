@@ -1,12 +1,17 @@
 import jax.numpy as jnp
 import jax.random
+from jax import config
 from optimal_control_problem import ocp
 from newton_oc import noc
 import matplotlib.pyplot as plt
 from utils import discretize_dynamics
 import jax
 
-jax.config.update("jax_enable_x64", True)
+# Enable 64 bit floating point precision
+config.update("jax_enable_x64", True)
+
+# We use the CPU instead of GPU und mute all warnings if no GPU/TPU is found.
+config.update("jax_platform_name", "cpu")
 
 
 def ode(state: jnp.ndarray, control: jnp.ndarray):

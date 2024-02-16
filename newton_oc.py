@@ -100,7 +100,7 @@ def fwd_pass(ocp, states, controls, gain, ffgain):
 
 def noc(ocp, controls, initial_state):
     states = compute_states(ocp.dynamics, controls, initial_state)
-    mu0 = 1.
+    mu0 = 1.0
     nu0 = 2.0
 
     def while_body(val):
