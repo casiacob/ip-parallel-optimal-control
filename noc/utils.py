@@ -1,6 +1,11 @@
 import jax.numpy as jnp
 from typing import Callable
-from jax.lax import fori_loop
+from jax import lax
+
+
+def wrap_angle(x: float) -> float:
+    # wrap angle between [0, 2*pi]
+    return x % (2.0 * jnp.pi)
 
 
 def runge_kutta(
@@ -30,7 +35,7 @@ def discretize_dynamics(ode: Callable, simulation_step: float, downsampling: int
             )
             return next_state
 
-        return fori_loop(
+        return lax.fori_loop(
             lower=0,
             upper=downsampling,
             body_fun=_step,
@@ -40,6 +45,10 @@ def discretize_dynamics(ode: Callable, simulation_step: float, downsampling: int
     return dynamics
 
 
-def wrap_angle(x: float) -> float:
-    # wrap angle between [0, 2*pi]
-    return x % (2.0 * jnp.pi)
+def rollout(dynamics, controls, initial_state):
+    def body(xt, ut):
+        return dynamics(xt, ut), dynamics(xt, ut)
+
+    _, states = lax.scan(body, initial_state, controls)
+    states = jnp.vstack((initial_state, states))
+    return states

@@ -1,0 +1,5 @@
+jax~=0.4.24
+noc~=0.0.1
+paroc~=0.0.1
+matplotlib~=3.5.3
+setuptools~=68.2.2

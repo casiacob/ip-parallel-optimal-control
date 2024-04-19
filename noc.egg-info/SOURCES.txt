@@ -1,0 +1,12 @@
+setup.py
+noc/ipoc.py
+noc/ipopt_solver.py
+noc/newton_oc.py
+noc/optimal_control_problem.py
+noc/utils.py
+noc.egg-info/PKG-INFO
+noc.egg-info/SOURCES.txt
+noc.egg-info/dependency_links.txt
+noc.egg-info/not-zip-safe
+noc.egg-info/requires.txt
+noc.egg-info/top_level.txt
