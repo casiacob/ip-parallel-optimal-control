@@ -7,7 +7,8 @@ from paroc.lqt_problem import LQT
 from noc.utils import rollout
 from typing import Callable
 
-
+_jitted_par_bwd_pass = jax.jit(par_bwd_pass)
+_jitted_par_fwd_pass = jax.jit(par_fwd_pass)
 def compute_derivatives(
     ocp: OCP, states: jnp.ndarray, controls: jnp.ndarray, bp: float
 ):
@@ -75,7 +76,8 @@ def bwd_pass(
         Qxx = Q + fx.T @ Vxx @ fx
         Quu = R + fu.T @ Vxx @ fu
         Quu = Quu + rp * jnp.eye(Quu.shape[0])
-        convex = jnp.all(jnp.linalg.eigvals(Quu) > 0)
+        eigv, _ = jnp.linalg.eigh(Quu)
+        convex = jnp.all(eigv > 0)
         Qxu = M + fx.T @ Vxx @ fu
         Qu = r + fu.T @ Vx
         Qx = fx.T @ Vx
@@ -158,7 +160,7 @@ def seq_solution(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray, bp: float, rp: float)
     lqr = LinearizedOCP(ru, Q, R, M)
     K, k, dV, bp_feasible = bwd_pass(ocp.final_cost, x[-1], lqr, d, rp)
     du, dx = fwd_pass(K, k, d)
-    return dx, du, dV, bp_feasible
+    return dx, du, dV, bp_feasible, ru
 
 
 def par_solution(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray, bp: float, rp: float):
@@ -167,8 +169,9 @@ def par_solution(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray, bp: float, rp: float)
     I = jnp.eye(R.shape[1])
     R = R + jnp.kron(jnp.ones((R.shape[0], 1, 1)), rp * I)
     lqt = noc_to_lqt(ru, Q, R, M, d.fx, d.fu)
-    Kx_par, d_par, S_par, v_par, pred_reduction, convex_problem = par_bwd_pass(lqt)
-    du_par, dx_par = par_fwd_pass(lqt, jnp.zeros(x[0].shape[0]), Kx_par, d_par)
+    Kx_par, d_par, S_par, v_par, pred_reduction, convex_problem = _jitted_par_bwd_pass(lqt)
+    du_par, dx_par = _jitted_par_fwd_pass(lqt, jnp.zeros(x[0].shape[0]), Kx_par, d_par)
+    # jax.debug.breakpoint()
     return dx_par, du_par, pred_reduction, convex_problem, ru
 
 
@@ -179,10 +182,10 @@ def noc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float):
 
     def while_body(val):
         x, u, t, mu, nu, _, _ = val
-        jax.debug.print("Iteration:    {x}", x=t)
+        # jax.debug.print("Iteration:    {x}", x=t)
 
         cost = ocp.total_cost(x, u, bp)
-        jax.debug.print("cost:         {x}", x=cost)
+        # jax.debug.print("cost:         {x}", x=cost)
         # jax.debug.breakpoint()
         dx, du, predicted_reduction, bp_feasible, Hu = par_solution(ocp, x, u, bp, mu)
         Hu_norm = jnp.max(jnp.abs(Hu))
@@ -193,12 +196,12 @@ def noc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float):
         new_cost = jnp.where(
             new_traj_feasible, ocp.total_cost(temp_x, temp_u, bp), jnp.inf
         )
-        jax.debug.print("new cost:     {x}", x=new_cost)
-        jax.debug.print("bp feasible:  {x}", x=bp_feasible)
+        # jax.debug.print("new cost:     {x}", x=new_cost)
+        # jax.debug.print("bp feasible:  {x}", x=bp_feasible)
 
         actual_reduction = new_cost - cost
         gain_ratio = actual_reduction / predicted_reduction
-        jax.debug.print("gain ratio:   {x}", x=gain_ratio)
+        # jax.debug.print("gain ratio:   {x}", x=gain_ratio)
 
         accept_cond = jnp.logical_and(gain_ratio > 0, bp_feasible)
         mu = jnp.where(
@@ -209,18 +212,20 @@ def noc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float):
         nu = jnp.where(accept_cond, 2.0, 2 * nu)
         x = jnp.where(accept_cond, temp_x, x)
         u = jnp.where(accept_cond, temp_u, u)
-        jax.debug.print("reg param:    {x}", x=mu)
-        jax.debug.print("a red:        {x}", x=actual_reduction)
-        jax.debug.print("p red         {x}", x=predicted_reduction)
-        jax.debug.print("|H_u|:        {x}", x=Hu_norm)
+        # jax.debug.print("reg param:    {x}", x=mu)
+        # jax.debug.print("a red:        {x}", x=actual_reduction)
+        # jax.debug.print("p red         {x}", x=predicted_reduction)
+        # jax.debug.print("|H_u|:        {x}", x=Hu_norm)
 
         t = t + 1
-        jax.debug.print("---------------------------------")
+        # jax.debug.print("---------------------------------")
+        # jax.debug.breakpoint()
         return x, u, t, mu, nu, Hu_norm, bp_feasible
 
     def while_cond(val):
-        _, _, _, _, _, Hu_norm, bp_feasible = val
-        exit_cond = jnp.logical_and(Hu_norm < 1e-2, bp_feasible)
+        _, _, t, _, _, Hu_norm, bp_feasible = val
+        exit_cond = jnp.logical_and(Hu_norm < 1e-4, bp_feasible)
+        # exit_cond = jnp.logical_or(exit_cond, t > 3045)
         return jnp.logical_not(exit_cond)
 
     (
@@ -248,6 +253,7 @@ def cnoc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray):
         _, u = noc(ocp, u, initial_state, bp)
         bp = bp / 5
         t = t + 1
+        # jax.debug.breakpoint()
         return u, bp, t
 
     def while_cond(val):
@@ -257,8 +263,8 @@ def cnoc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray):
     opt_u, _, t_conv = lax.while_loop(
         while_cond, while_body, (controls, barrier_param, 0)
     )
-    jax.debug.print("converged in {x}", x=t_conv)
+    # jax.debug.print("converged in {x}", x=t_conv)
     opt_x = rollout(ocp.dynamics, opt_u, initial_state)
     optimal_cost = ocp.total_cost(opt_x, opt_u, 0.0)
-    jax.debug.print("optimal cost {x}", x=optimal_cost)
+    # jax.debug.print("optimal cost {x}", x=optimal_cost)
     return opt_x, opt_u

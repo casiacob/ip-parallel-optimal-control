@@ -1,8 +1,7 @@
 setup.py
-noc/ipoc.py
-noc/ipopt_solver.py
 noc/newton_oc.py
 noc/optimal_control_problem.py
+noc/primal_dual_ip_noc.py
 noc/utils.py
 noc.egg-info/PKG-INFO
 noc.egg-info/SOURCES.txt

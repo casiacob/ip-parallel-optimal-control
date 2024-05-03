@@ -2,16 +2,17 @@ import jax.numpy as jnp
 import jax.random
 from jax import config
 from noc.optimal_control_problem import OCP
-from noc.newton_oc import cnoc
+from noc.newton_oc import noc
 import matplotlib.pyplot as plt
-from noc.utils import discretize_dynamics, rollout
+from noc.utils import discretize_dynamics
 import jax
 
 # Enable 64 bit floating point precision
 config.update("jax_enable_x64", True)
 # config.update("jax_disable_jit", True)
 
-config.update("jax_platform_name", "cuda")
+# We use the CPU instead of GPU und mute all warnings if no GPU/TPU is found.
+config.update("jax_platform_name", "cpu")
 
 
 def ode(state: jnp.ndarray, control: jnp.ndarray):
@@ -26,18 +27,13 @@ dynamics = discretize_dynamics(ode, step, downsampling)
 
 
 def constraints(state: jnp.ndarray, control: jnp.ndarray):
-    g0 = control - 2.5
-    g1 = -control - 2.5
-    g3 = -state[1] - 1.5
-    return jnp.hstack((g0, g1, g3))
+    return -1.0
 
 
 def stage_cost(state: jnp.ndarray, control: jnp.ndarray, bp: float):
     X = jnp.diag(jnp.array([1e2, 1e0]))
     U = 1e-1 * jnp.eye(control.shape[0])
-    c = 0.5 * state.T @ X @ state + 0.5 * control.T @ U @ control
-    log_barrier = jnp.sum(jnp.log(-constraints(state, control)))
-    return c - bp * log_barrier
+    return 0.5 * state.T @ X @ state + 0.5 * control.T @ U @ control
 
 
 def final_cost(state: jnp.ndarray):
@@ -51,13 +47,14 @@ def total_cost(states: jnp.ndarray, controls: jnp.ndarray, bp: float):
     return cT + jnp.sum(ct)
 
 
-horizon = 60
-x0 = jnp.array([2.0, -1.0])
+horizon = 10
+x0 = jnp.array([2.0, 1.0])
 key = jax.random.PRNGKey(1)
-u = 0. * jax.random.normal(key, shape=(horizon, 1))
+u = 0.0 * jax.random.normal(key, shape=(horizon, 1))
 lqr = OCP(dynamics, constraints, stage_cost, final_cost, total_cost)
-x = rollout(dynamics, u, x0)
-x_noc, u_noc = cnoc(lqr, u, x0)
+barrier_param = 0.0
+
+x_noc, u_noc = noc(lqr, u, x0, barrier_param)
 plt.plot(x_noc[:, 0])
 plt.plot(x_noc[:, 1])
 plt.show()
