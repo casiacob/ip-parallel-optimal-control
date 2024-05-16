@@ -81,7 +81,6 @@ sigma = jnp.array([0.1])
 key = jax.random.PRNGKey(1)
 u0 = sigma * jax.random.normal(key, shape=(horizon, 1))
 x0 = jnp.array([wrap_angle(0.1), -0.1])
-# x0 = jnp.array([0.1, -0.1])
 ilqr = OCP(dynamics, constraints, transient_cost, final_cost, total_cost)
 
 def mpc_loop(carry, input):
@@ -90,12 +89,12 @@ def mpc_loop(carry, input):
     return (x[1], u), (x[1], u[0])
 
 jitted_mpc_loop = jax.jit(mpc_loop)
-_, (mpc_x, mpc_u) = jax.lax.scan(jitted_mpc_loop, (x0, u0), xs=None, length=100)
-# start = time.time()
-# _, (mpc_x, mpc_u) = jax.lax.scan(jitted_mpc_loop, (x0, u0), xs=None, length=100)
-# jax.block_until_ready(mpc_u)
-# end = time.time()
-# print(end-start)
+_, (mpc_x, mpc_u) = jax.lax.scan(jitted_mpc_loop, (x0, u0), xs=None, length=80)
+start = time.time()
+_, (mpc_x, mpc_u) = jax.lax.scan(jitted_mpc_loop, (x0, u0), xs=None, length=80)
+jax.block_until_ready(mpc_u)
+end = time.time()
+print(end-start)
 
 # mpc_x = jnp.vstack((x0, mpc_x))
 # # x_noc, u_noc = cnoc(ilqr, u, x0)

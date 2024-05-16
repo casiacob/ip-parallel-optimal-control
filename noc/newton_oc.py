@@ -1,5 +1,5 @@
 import jax.numpy as jnp
-from jax import grad, jacfwd, lax, hessian
+from jax import grad, jacrev, lax, hessian
 import jax
 from noc.optimal_control_problem import OCP, Derivatives, LinearizedOCP
 from paroc import par_bwd_pass, par_fwd_pass
@@ -7,22 +7,19 @@ from paroc.lqt_problem import LQT
 from noc.utils import rollout
 from typing import Callable
 
-_jitted_par_bwd_pass = jax.jit(par_bwd_pass)
-_jitted_par_fwd_pass = jax.jit(par_fwd_pass)
+
 def compute_derivatives(
     ocp: OCP, states: jnp.ndarray, controls: jnp.ndarray, bp: float
 ):
     def body(x, u):
-        cx_k = grad(ocp.stage_cost, 0)(x, u, bp)
-        cu_k = grad(ocp.stage_cost, 1)(x, u, bp)
+        cx_k, cu_k = grad(ocp.stage_cost, (0, 1))(x, u, bp)
         cxx_k = hessian(ocp.stage_cost, 0)(x, u, bp)
         cuu_k = hessian(ocp.stage_cost, 1)(x, u, bp)
-        cxu_k = jacfwd(jacfwd(ocp.stage_cost, 0), 1)(x, u, bp)
-        fx_k = jacfwd(ocp.dynamics, 0)(x, u)
-        fu_k = jacfwd(ocp.dynamics, 1)(x, u)
-        fxx_k = jacfwd(jacfwd(ocp.dynamics, 0), 0)(x, u)
-        fuu_k = jacfwd(jacfwd(ocp.dynamics, 1), 1)(x, u)
-        fxu_k = jacfwd(jacfwd(ocp.dynamics, 0), 1)(x, u)
+        cxu_k = jacrev(jacrev(ocp.stage_cost, 0), 1)(x, u, bp)
+        fx_k, fu_k = jacrev(ocp.dynamics, (0, 1))(x, u)
+        fxx_k = jacrev(jacrev(ocp.dynamics, 0), 0)(x, u)
+        fuu_k = jacrev(jacrev(ocp.dynamics, 1), 1)(x, u)
+        fxu_k = jacrev(jacrev(ocp.dynamics, 0), 1)(x, u)
         return cx_k, cu_k, cxx_k, cuu_k, cxu_k, fx_k, fu_k, fxx_k, fuu_k, fxu_k
 
     cx, cu, cxx, cuu, cxu, fx, fu, fxx, fuu, fxu = jax.vmap(body)(states[:-1], controls)
@@ -31,11 +28,12 @@ def compute_derivatives(
 
 def compute_lqr_params(lagrange_multipliers: jnp.ndarray, d: Derivatives):
     def body(l, cu, cxx, cuu, cxu, fu, fxx, fuu, fxu):
-        r = cu + fu.T @ l
+        # lqr params
+        ru = cu + fu.T @ l
         Q = cxx + jnp.tensordot(l, fxx, axes=1)
         R = cuu + jnp.tensordot(l, fuu, axes=1)
         M = cxu + jnp.tensordot(l, fxu, axes=1)
-        return r, Q, R, M
+        return ru, Q, R, M
 
     return jax.vmap(body)(
         lagrange_multipliers[1:], d.cu, d.cxx, d.cuu, d.cxu, d.fu, d.fxx, d.fuu, d.fxu
@@ -43,19 +41,18 @@ def compute_lqr_params(lagrange_multipliers: jnp.ndarray, d: Derivatives):
 
 
 def compute_Lagrange_multipliers(
-    ocp: OCP, states: jnp.ndarray, controls: jnp.ndarray, d: Derivatives
+    ocp: OCP, xT: jnp.ndarray, d: Derivatives
 ):
-    xT = states[-1]
     lamda_T = grad(ocp.final_cost, 0)(xT)
 
     def body(carry, inp):
         lamda = carry
-        x, u, cx, fx = inp
+        cx, fx = inp
         lamda = cx + fx.T @ lamda
         return lamda, lamda
 
     _, lamda_opt = lax.scan(
-        body, lamda_T, (states[:-1], controls, d.cx, d.fx), reverse=True
+        body, lamda_T, (d.cx, d.fx), reverse=True
     )
     lamda_opt = jnp.vstack((lamda_opt, lamda_T))
     return lamda_opt
@@ -129,11 +126,11 @@ def noc_to_lqt(
     nx = Q.shape[1]
     nu = R.shape[1]
 
-    def references(Xt, Ut, Mt, rut):
-        XiM = jnp.linalg.solve(Xt, Mt)
-        st = -jnp.linalg.solve(Ut - Mt.T @ XiM, rut)
-        rt = -XiM @ st
-        return rt, st
+    def references(X_t, U_t, M_t, ru_t):
+        X_inv_M = jnp.linalg.solve(X_t, M_t)
+        s_t = -jnp.linalg.solve(U_t - M_t.T @ X_inv_M, ru_t)
+        r_t = -X_inv_M @ s_t
+        return r_t, s_t
 
     r, s = jax.vmap(references)(Q, R, M, ru)
     H = jnp.eye(nx)
@@ -148,14 +145,9 @@ def noc_to_lqt(
     return lqt
 
 
-def devs_and_lagrange(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray, bp: float):
-    d = compute_derivatives(ocp, x, u, bp)
-    l = compute_Lagrange_multipliers(ocp, x, u, d)
-    return d, l
-
-
 def seq_solution(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray, bp: float, rp: float):
-    d, l = devs_and_lagrange(ocp, x, u, bp)
+    d = compute_derivatives(ocp, x, u, bp)
+    l = compute_Lagrange_multipliers(ocp, x[-1], d)
     ru, Q, R, M = compute_lqr_params(l, d)
     lqr = LinearizedOCP(ru, Q, R, M)
     K, k, dV, bp_feasible = bwd_pass(ocp.final_cost, x[-1], lqr, d, rp)
@@ -164,13 +156,13 @@ def seq_solution(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray, bp: float, rp: float)
 
 
 def par_solution(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray, bp: float, rp: float):
-    d, l = devs_and_lagrange(ocp, x, u, bp)
+    d = compute_derivatives(ocp, x, u, bp)
+    l = compute_Lagrange_multipliers(ocp, x[-1], d)
     ru, Q, R, M = compute_lqr_params(l, d)
-    I = jnp.eye(R.shape[1])
-    R = R + jnp.kron(jnp.ones((R.shape[0], 1, 1)), rp * I)
+    R = R + jnp.kron(jnp.ones((R.shape[0], 1, 1)), rp * jnp.eye(R.shape[1]))
     lqt = noc_to_lqt(ru, Q, R, M, d.fx, d.fu)
-    Kx_par, d_par, S_par, v_par, pred_reduction, convex_problem = _jitted_par_bwd_pass(lqt)
-    du_par, dx_par = _jitted_par_fwd_pass(lqt, jnp.zeros(x[0].shape[0]), Kx_par, d_par)
+    Kx_par, d_par, S_par, v_par, pred_reduction, convex_problem = par_bwd_pass(lqt)
+    du_par, dx_par = par_fwd_pass(lqt, jnp.zeros(x[0].shape[0]), Kx_par, d_par)
     # jax.debug.breakpoint()
     return dx_par, du_par, pred_reduction, convex_problem, ru
 
@@ -187,6 +179,7 @@ def noc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float):
         cost = ocp.total_cost(x, u, bp)
         # jax.debug.print("cost:         {x}", x=cost)
         # jax.debug.breakpoint()
+
         dx, du, predicted_reduction, bp_feasible, Hu = par_solution(ocp, x, u, bp, mu)
         Hu_norm = jnp.max(jnp.abs(Hu))
 
@@ -204,6 +197,7 @@ def noc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float):
         # jax.debug.print("gain ratio:   {x}", x=gain_ratio)
 
         accept_cond = jnp.logical_and(gain_ratio > 0, bp_feasible)
+        # jax.debug.print("Accept cond:  {x}", x=accept_cond)
         mu = jnp.where(
             accept_cond,
             mu * jnp.maximum(1.0 / 3.0, 1.0 - (2.0 * gain_ratio - 1.0) ** 3),
@@ -225,7 +219,7 @@ def noc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float):
     def while_cond(val):
         _, _, t, _, _, Hu_norm, bp_feasible = val
         exit_cond = jnp.logical_and(Hu_norm < 1e-4, bp_feasible)
-        # exit_cond = jnp.logical_or(exit_cond, t > 3045)
+        # exit_cond = jnp.logical_or(exit_cond, t > 1)
         return jnp.logical_not(exit_cond)
 
     (

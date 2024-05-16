@@ -28,31 +28,3 @@ class LinearizedOCP(NamedTuple):
     Q: jnp.ndarray
     R: jnp.ndarray
     M: jnp.ndarray
-
-
-class CDerivatives(NamedTuple):
-    cx: jnp.ndarray
-    cu: jnp.ndarray
-    cxx: jnp.ndarray
-    cuu: jnp.ndarray
-    cxu: jnp.ndarray
-    fx: jnp.ndarray
-    fu: jnp.ndarray
-    fxx: jnp.ndarray
-    fuu: jnp.ndarray
-    fxu: jnp.ndarray
-    gx: jnp.ndarray
-    gu: jnp.ndarray
-    gxx: jnp.ndarray
-    guu: jnp.ndarray
-    gxu: jnp.ndarray
-
-
-class IPOCP(NamedTuple):
-    dynamics: Callable
-    constraints: Callable
-    stage_cost: Callable
-    final_cost: Callable
-    total_cost: Callable
-    barrier_stage_cost: Callable
-    barrier_total_cost: Callable

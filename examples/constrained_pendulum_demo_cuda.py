@@ -75,7 +75,7 @@ dynamics = discretize_dynamics(
     ode=pendulum, simulation_step=simulation_step, downsampling=downsampling
 )
 
-horizon = 20
+horizon = 60
 sigma = jnp.array([0.1])
 key = jax.random.PRNGKey(1)
 u = sigma * jax.random.normal(key, shape=(horizon, 1))
