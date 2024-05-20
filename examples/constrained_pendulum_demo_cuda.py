@@ -2,7 +2,7 @@ import jax.numpy as jnp
 import jax.random
 from jax import config
 from noc.optimal_control_problem import OCP
-from noc.newton_oc import cnoc
+from noc.par_primal_barr_optimal_control import par_log_barrier
 import matplotlib.pyplot as plt
 from noc.utils import discretize_dynamics
 from jax import lax, debug
@@ -11,7 +11,7 @@ from noc.utils import wrap_angle
 # Enable 64 bit floating point precision
 config.update("jax_enable_x64", True)
 
-config.update("jax_platform_name", "cuda")
+config.update("jax_platform_name", "cpu")
 def constraints(state, control):
     control_ub = 5.
     control_lb = -5.
@@ -82,7 +82,7 @@ u = sigma * jax.random.normal(key, shape=(horizon, 1))
 x0 = jnp.array([wrap_angle(0.1), -0.1])
 # x0 = jnp.array([0.1, -0.1])
 ilqr = OCP(dynamics, constraints, transient_cost, final_cost, total_cost)
-x_noc, u_noc = cnoc(ilqr, u, x0)
+x_noc, u_noc = par_log_barrier(ilqr, u, x0)
 plt.plot(x_noc[:, 0])
 plt.plot(x_noc[:, 1])
 # plt.show()

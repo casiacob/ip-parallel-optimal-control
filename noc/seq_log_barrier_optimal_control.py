@@ -6,6 +6,7 @@ from paroc import par_bwd_pass, par_fwd_pass
 from paroc.lqt_problem import LQT
 from noc.utils import rollout
 from typing import Callable
+from noc.costates import seq_costates
 
 
 def compute_derivatives(
@@ -39,28 +40,6 @@ def compute_lqr_params(lagrange_multipliers: jnp.ndarray, d: Derivatives):
         lagrange_multipliers[1:], d.cu, d.cxx, d.cuu, d.cxu, d.fu, d.fxx, d.fuu, d.fxu
     )
 
-
-def compute_Lagrange_multipliers(
-    ocp: OCP, xT: jnp.ndarray, d: Derivatives
-):
-    lamda_T = grad(ocp.final_cost, 0)(xT)
-
-    def body(carry, inp):
-        lamda = carry
-        cx, fx = inp
-        lamda = cx + fx.T @ lamda
-        return lamda, lamda
-
-    _, lamda_opt = lax.scan(
-        body, lamda_T, (d.cx, d.fx), reverse=True
-    )
-    lamda_opt = jnp.vstack((lamda_opt, lamda_T))
-    return lamda_opt
-
-
-def check_feasibility(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray):
-    cons = jax.vmap(ocp.constraints)(x[:-1], u)
-    return jnp.all(cons <= 0)
 
 
 def bwd_pass(
@@ -114,57 +93,20 @@ def fwd_pass(gain: jnp.ndarray, ff_gain: jnp.ndarray, d: Derivatives):
     return du, dx
 
 
-def noc_to_lqt(
-    ru: jnp.ndarray,
-    Q: jnp.ndarray,
-    R: jnp.ndarray,
-    M: jnp.ndarray,
-    A: jnp.ndarray,
-    B: jnp.ndarray,
-):
-    T = Q.shape[0]
-    nx = Q.shape[1]
-    nu = R.shape[1]
+def check_feasibility(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray):
+    cons = jax.vmap(ocp.constraints)(x[:-1], u)
+    return jnp.all(cons <= 0)
 
-    def references(X_t, U_t, M_t, ru_t):
-        X_inv_M = jnp.linalg.solve(X_t, M_t)
-        s_t = -jnp.linalg.solve(U_t - M_t.T @ X_inv_M, ru_t)
-        r_t = -X_inv_M @ s_t
-        return r_t, s_t
-
-    r, s = jax.vmap(references)(Q, R, M, ru)
-    H = jnp.eye(nx)
-    HT = H
-    H = jnp.kron(jnp.ones((T, 1, 1)), H)
-    Z = jnp.eye(nu)
-    Z = jnp.kron(jnp.ones((T, 1, 1)), Z)
-    XT = Q[0]
-    rT = jnp.zeros(nx)
-    c = jnp.zeros((T, nx))
-    lqt = LQT(A, B, c, XT, HT, rT, Q, H, r, R, Z, s, M)
-    return lqt
 
 
 def seq_solution(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray, bp: float, rp: float):
     d = compute_derivatives(ocp, x, u, bp)
-    l = compute_Lagrange_multipliers(ocp, x[-1], d)
+    l = seq_costates(ocp, x[-1], d)
     ru, Q, R, M = compute_lqr_params(l, d)
     lqr = LinearizedOCP(ru, Q, R, M)
     K, k, dV, bp_feasible = bwd_pass(ocp.final_cost, x[-1], lqr, d, rp)
     du, dx = fwd_pass(K, k, d)
     return dx, du, dV, bp_feasible, ru
-
-
-def par_solution(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray, bp: float, rp: float):
-    d = compute_derivatives(ocp, x, u, bp)
-    l = compute_Lagrange_multipliers(ocp, x[-1], d)
-    ru, Q, R, M = compute_lqr_params(l, d)
-    R = R + jnp.kron(jnp.ones((R.shape[0], 1, 1)), rp * jnp.eye(R.shape[1]))
-    lqt = noc_to_lqt(ru, Q, R, M, d.fx, d.fu)
-    Kx_par, d_par, S_par, v_par, pred_reduction, convex_problem = par_bwd_pass(lqt)
-    du_par, dx_par = par_fwd_pass(lqt, jnp.zeros(x[0].shape[0]), Kx_par, d_par)
-    # jax.debug.breakpoint()
-    return dx_par, du_par, pred_reduction, convex_problem, ru
 
 
 def noc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float):
@@ -180,7 +122,7 @@ def noc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float):
         # jax.debug.print("cost:         {x}", x=cost)
         # jax.debug.breakpoint()
 
-        dx, du, predicted_reduction, bp_feasible, Hu = par_solution(ocp, x, u, bp, mu)
+        dx, du, predicted_reduction, bp_feasible, Hu = seq_solution(ocp, x, u, bp, mu)
         Hu_norm = jnp.max(jnp.abs(Hu))
 
         temp_u = u + du
@@ -239,7 +181,7 @@ def noc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float):
     return opt_x, opt_u
 
 
-def cnoc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray):
+def seq_log_barrier(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray):
     barrier_param = 0.1
 
     def while_body(val):
