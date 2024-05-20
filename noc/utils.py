@@ -1,6 +1,8 @@
 import jax.numpy as jnp
 from typing import Callable
 from jax import lax
+import numpy as np
+from scipy import linalg
 
 
 def wrap_angle(x: float) -> float:
@@ -52,3 +54,52 @@ def rollout(dynamics, controls, initial_state):
     _, states = lax.scan(body, initial_state, controls)
     states = jnp.vstack((initial_state, states))
     return states
+
+
+
+def get_QP_problem(A, B, P, Q, R, N, C_u, uub, ulb):
+    m = A.shape[0]
+    H = Q
+    G = R
+    for i in range(N - 2):
+        H = linalg.block_diag(H, Q)
+    for i in range(N - 1):
+        G = linalg.block_diag(G, R)
+    H = linalg.block_diag(H, P)
+
+    Abar = np.eye(m)
+    for i in range(1, N):
+        Abar = np.append(Abar, np.zeros((i * m, m)), axis=1)
+        if i == 1:
+            next_row = np.append(-A, np.eye(m), axis=1)
+        else:
+            next_row = np.append(np.zeros((m, (i - 1) * m)), -A, axis=1)
+            next_row = np.append(next_row, np.eye(m), axis=1)
+        Abar = np.append(Abar, next_row, axis=0)
+
+    invAbar = linalg.solve(Abar, np.eye(Abar.shape[0]))
+
+    Bbar = B
+    for i in range(1, N):
+        Bbar = linalg.block_diag(Bbar, B)
+
+    c = np.zeros((m * N, m))
+    c[0:m][0:m] = A
+
+    boldQ = Bbar.T @ invAbar.T @ H @ invAbar @ Bbar + G
+    boldF = Bbar.T @ invAbar.T @ H @ invAbar @ c
+
+
+    C_U = np.append(C_u, -C_u, axis=0)
+    for i in range(N - 1):
+        C_U = linalg.block_diag(C_U, np.append(C_u, -C_u, axis=0))
+
+    ulim = np.append(uub, -ulb)
+    for i in range(N - 1):
+        ulim = np.append(ulim, np.append(uub, -ulb), axis=0)
+
+
+    boldG = C_U
+    boldW = ulim
+
+    return jnp.array(boldQ), jnp.array(boldF), jnp.array(boldG), jnp.array(boldW)
