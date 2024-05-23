@@ -2,17 +2,24 @@ import jax.numpy as jnp
 import jax.random
 from jax import config
 from noc.optimal_control_problem import OCP
-from noc.newton_oc import cnoc
-import matplotlib.pyplot as plt
+from noc.par_log_barrier_optimal_control import par_log_barrier
+from noc.seq_log_barrier_optimal_control import seq_log_barrier
 from noc.utils import discretize_dynamics, rollout
 import jax
+import time
+import argparse
 
 # Enable 64 bit floating point precision
 config.update("jax_enable_x64", True)
 # config.update("jax_disable_jit", True)
 
-config.update("jax_platform_name", "cuda")
+config.update("jax_platform_name", "gpu")
 
+parser = argparse.ArgumentParser(description='Configure par vs seq experiment')
+parser.add_argument('--parallel', action=argparse.BooleanOptionalAction, help='use parallel or sequential solver')
+parser.add_argument('--Ts', metavar='Ts', type=float, default=0.1, help='sampling period')
+parser.add_argument('--N', metavar='N', type=int, default=60, help='horizon')
+args = parser.parse_args()
 
 def ode(state: jnp.ndarray, control: jnp.ndarray):
     A = jnp.array([[0.0, 1.0], [0.0, 0.0]])
@@ -20,16 +27,16 @@ def ode(state: jnp.ndarray, control: jnp.ndarray):
     return A @ state + B @ control
 
 
-step = 0.1
+sampling_period = args.Ts
 downsampling = 1
-dynamics = discretize_dynamics(ode, step, downsampling)
+dynamics = discretize_dynamics(ode, sampling_period, downsampling)
 
+horizon = args.N
 
 def constraints(state: jnp.ndarray, control: jnp.ndarray):
     g0 = control - 2.5
     g1 = -control - 2.5
-    g3 = -state[1] - 1.5
-    return jnp.hstack((g0, g1, g3))
+    return jnp.hstack((g0, g1))
 
 
 def stage_cost(state: jnp.ndarray, control: jnp.ndarray, bp: float):
@@ -51,15 +58,29 @@ def total_cost(states: jnp.ndarray, controls: jnp.ndarray, bp: float):
     return cT + jnp.sum(ct)
 
 
-horizon = 60
-x0 = jnp.array([2.0, -1.0])
+x0 = jnp.array([2.0, 1.0])
 key = jax.random.PRNGKey(1)
 u = 0. * jax.random.normal(key, shape=(horizon, 1))
-lqr = OCP(dynamics, constraints, stage_cost, final_cost, total_cost)
-x = rollout(dynamics, u, x0)
-x_noc, u_noc = cnoc(lqr, u, x0)
-plt.plot(x_noc[:, 0])
-plt.plot(x_noc[:, 1])
-plt.show()
-plt.plot(u_noc)
-plt.show()
+linear_problem = OCP(dynamics, constraints, stage_cost, final_cost, total_cost)
+
+anon_par_log_barrier = lambda u, x0: par_log_barrier(linear_problem, u, x0)
+anon_seq_log_barrier = lambda u, x0: seq_log_barrier(linear_problem, u, x0)
+_jitted_par_log_barrier = jax.jit(anon_par_log_barrier)
+_jitted_seq_log_barrier = jax.jit(anon_seq_log_barrier)
+
+_, _ = _jitted_par_log_barrier( u, x0)
+start = time.time()
+par_x, par_u = _jitted_par_log_barrier( u, x0)
+jax.block_until_ready(par_x)
+end = time.time()
+par_time = end - start
+
+
+_, _ = _jitted_seq_log_barrier( u, x0)
+start = time.time()
+seq_x, seq_u = _jitted_seq_log_barrier( u, x0)
+jax.block_until_ready(seq_x)
+end = time.time()
+seq_time = end - start
+
+print(sampling_period, ", ", par_time, ", ", seq_time)
