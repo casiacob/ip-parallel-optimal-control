@@ -6,7 +6,7 @@ from paroc import par_bwd_pass, par_fwd_pass
 from paroc.lqt_problem import LQT
 from noc.utils import rollout
 from typing import Callable
-from noc.costates import seq_costates
+from noc.costates import par_costates
 
 
 def compute_derivatives(
@@ -28,69 +28,13 @@ def compute_derivatives(
 
 
 def compute_lqr_params(lagrange_multipliers: jnp.ndarray, d: Derivatives):
-    def body(l, cu, cxx, cuu, cxu, fu, fxx, fuu, fxu):
+    def body(l, cu, fu):
         # lqr params
-        ru = cu + fu.T @ l
-        Q = cxx + jnp.tensordot(l, fxx, axes=1)
-        R = cuu + jnp.tensordot(l, fuu, axes=1)
-        M = cxu + jnp.tensordot(l, fxu, axes=1)
-        return ru, Q, R, M
+        return cu + fu.T @ l
 
     return jax.vmap(body)(
-        lagrange_multipliers[1:], d.cu, d.cxx, d.cuu, d.cxu, d.fu, d.fxx, d.fuu, d.fxu
+        lagrange_multipliers[1:], d.cu, d.fu
     )
-
-
-
-def bwd_pass(
-    final_cost: Callable, xN: jnp.ndarray, lqr: LinearizedOCP, d: Derivatives, rp: float
-):
-    def bwd_step(carry, inp):
-        Vxx, Vx = carry
-        r, Q, R, M, fx, fu = inp
-
-        Qxx = Q + fx.T @ Vxx @ fx
-        Quu = R + fu.T @ Vxx @ fu
-        Quu = Quu + rp * jnp.eye(Quu.shape[0])
-        eigv, _ = jnp.linalg.eigh(Quu)
-        convex = jnp.all(eigv > 0)
-        Qxu = M + fx.T @ Vxx @ fu
-        Qu = r + fu.T @ Vx
-        Qx = fx.T @ Vx
-
-        k = -jnp.linalg.inv(Quu) @ Qu
-        K = -jnp.linalg.inv(Quu) @ Qxu.T
-
-        Vx = Qx - Qu @ jnp.linalg.inv(Quu) @ Qxu.T
-        Vxx = Qxx - Qxu @ jnp.linalg.inv(Quu) @ Qxu.T
-        dV = k.T @ Qu + 0.5 * k.T @ Quu @ k
-        return (Vxx, Vx), (K, k, dV, convex)
-
-    VxxN = hessian(final_cost)(xN)
-    VxN = jnp.zeros(xN.shape[0])
-
-    _, (gain, ff_gain, diff_cost, pos_def) = lax.scan(
-        bwd_step,
-        (VxxN, VxN),
-        (lqr.r, lqr.Q, lqr.R, lqr.M, d.fx, d.fu),
-        reverse=True,
-    )
-    return gain, ff_gain, jnp.sum(diff_cost), jnp.all(pos_def)
-
-
-def fwd_pass(gain: jnp.ndarray, ff_gain: jnp.ndarray, d: Derivatives):
-    dx0 = jnp.zeros(gain.shape[2])
-
-    def fwd_step(carry, inp):
-        prev_dx = carry
-        K, k, fx, fu = inp
-        next_dx = (fx + fu @ K) @ prev_dx + fu @ k
-        return next_dx, next_dx
-
-    _, dx = lax.scan(fwd_step, dx0, (gain, ff_gain, d.fx, d.fu))
-    dx = jnp.vstack((dx0, dx))
-    du = jax.vmap(lambda K, k, x: K @ x + k)(gain, ff_gain, dx[:-1])
-    return du, dx
 
 
 def check_feasibility(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray):
@@ -98,18 +42,51 @@ def check_feasibility(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray):
     return jnp.all(cons <= 0)
 
 
+def noc_to_lqt(
+    ru: jnp.ndarray,
+    Q: jnp.ndarray,
+    R: jnp.ndarray,
+    M: jnp.ndarray,
+    A: jnp.ndarray,
+    B: jnp.ndarray,
+):
+    T = Q.shape[0]
+    nx = Q.shape[1]
+    nu = R.shape[1]
 
-def seq_solution(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray, bp: float, rp: float):
+    def references(X_t, U_t, M_t, ru_t):
+        X_inv_M = jnp.linalg.solve(X_t, M_t)
+        s_t = -jnp.linalg.solve(U_t - M_t.T @ X_inv_M, ru_t)
+        r_t = -X_inv_M @ s_t
+        return r_t, s_t
+
+    r, s = jax.vmap(references)(Q, R, M, ru)
+    H = jnp.eye(nx)
+    HT = H
+    H = jnp.kron(jnp.ones((T, 1, 1)), H)
+    Z = jnp.eye(nu)
+    Z = jnp.kron(jnp.ones((T, 1, 1)), Z)
+    XT = Q[0]
+    rT = jnp.zeros(nx)
+    c = jnp.zeros((T, nx))
+    lqt = LQT(A, B, c, XT, HT, rT, Q, H, r, R, Z, s, M)
+    return lqt
+
+
+def par_solution(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray, bp: float, rp: float):
     d = compute_derivatives(ocp, x, u, bp)
-    l = seq_costates(ocp, x[-1], d)
-    ru, Q, R, M = compute_lqr_params(l, d)
-    lqr = LinearizedOCP(ru, Q, R, M)
-    K, k, dV, bp_feasible = bwd_pass(ocp.final_cost, x[-1], lqr, d, rp)
-    du, dx = fwd_pass(K, k, d)
-    return dx, du, dV, bp_feasible, ru
+    l = par_costates(ocp, x[-1], d)
+    ru = compute_lqr_params(l, d)
+    R = d.cuu
+    R = R + jnp.kron(jnp.ones((R.shape[0], 1, 1)), rp * jnp.eye(R.shape[1]))
+    lqt = noc_to_lqt(ru, d.cxx, R, d.cxu, d.fx, d.fu)
+    Kx_par, d_par, S_par, v_par, pred_reduction, convex_problem = par_bwd_pass(lqt)
+    du_par, dx_par = par_fwd_pass(lqt, jnp.zeros(x[0].shape[0]), Kx_par, d_par)
+    # jax.debug.breakpoint()
+    return dx_par, du_par, pred_reduction, convex_problem, ru
 
 
-def noc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float):
+def gnoc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float):
     states = rollout(ocp.dynamics, controls, initial_state)
     mu0 = 1.0
     nu0 = 2.0
@@ -122,7 +99,7 @@ def noc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float):
         # jax.debug.print("cost:         {x}", x=cost)
         # jax.debug.breakpoint()
 
-        dx, du, predicted_reduction, bp_feasible, Hu = seq_solution(ocp, x, u, bp, mu)
+        dx, du, predicted_reduction, bp_feasible, Hu = par_solution(ocp, x, u, bp, mu)
         Hu_norm = jnp.max(jnp.abs(Hu))
 
         temp_u = u + du
@@ -181,12 +158,12 @@ def noc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float):
     return opt_x, opt_u
 
 
-def seq_log_barrier(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray):
+def gn_par_log_barrier(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray):
     barrier_param = 0.1
 
     def while_body(val):
         u, bp, t = val
-        _, u = noc(ocp, u, initial_state, bp)
+        _, u = gnoc(ocp, u, initial_state, bp)
         bp = bp / 5
         t = t + 1
         # jax.debug.breakpoint()
@@ -194,7 +171,7 @@ def seq_log_barrier(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray)
 
     def while_cond(val):
         _, bp, t = val
-        return t < 2
+        return bp < 1e-4
 
     opt_u, _, t_conv = lax.while_loop(
         while_cond, while_body, (controls, barrier_param, 0)

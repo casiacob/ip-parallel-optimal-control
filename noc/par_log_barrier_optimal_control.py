@@ -173,8 +173,8 @@ def par_log_barrier(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray)
         return u, bp, t
 
     def while_cond(val):
-        _, bp, _ = val
-        return bp > 1e-5
+        _, bp, t = val
+        return bp < 1e-4
 
     opt_u, _, t_conv = lax.while_loop(
         while_cond, while_body, (controls, barrier_param, 0)
