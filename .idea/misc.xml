@@ -3,5 +3,5 @@
   <component name="Black">
     <option name="sdkName" value="parcon" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="parcon" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.10 (noc)" project-jdk-type="Python SDK" />
 </project>

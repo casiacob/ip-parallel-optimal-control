@@ -144,7 +144,7 @@ def gnoc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float)
     (
         opt_x,
         opt_u,
-        _,
+        iterations,
         _,
         _,
         _,
@@ -154,6 +154,7 @@ def gnoc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float)
         while_body,
         (states, controls, 0, mu0, nu0, jnp.array(1.0), jnp.bool(1.0)),
     )
+    jax.debug.print('Converged in {x} iterations', x=iterations)
     # jax.debug.breakpoint()
     return opt_x, opt_u
 
@@ -171,7 +172,7 @@ def gn_par_log_barrier(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarr
 
     def while_cond(val):
         _, bp, t = val
-        return bp < 1e-4
+        return bp > 1e-4
 
     opt_u, _, t_conv = lax.while_loop(
         while_cond, while_body, (controls, barrier_param, 0)

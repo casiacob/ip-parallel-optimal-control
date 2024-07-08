@@ -2,7 +2,7 @@ import jax.numpy as jnp
 import jax.random
 from jax import config
 from noc.optimal_control_problem import OCP
-from noc.par_primal_barr_optimal_control import par_log_barrier
+from noc.par_log_barrier_optimal_control import par_log_barrier
 import matplotlib.pyplot as plt
 from noc.utils import discretize_dynamics
 from jax import lax, debug

@@ -2,12 +2,12 @@ import jax.numpy as jnp
 import jax.random
 from jax import config
 from noc.optimal_control_problem import OCP
-from noc.par_primal_barr_optimal_control import par_log_barrier
+from noc.par_log_barrier_optimal_control import par_log_barrier
 from noc.par_log_barrier_optimal_control_gauss_newton import gn_par_log_barrier
 import matplotlib.pyplot as plt
 from noc.utils import discretize_dynamics
-from jax import lax, debug
 from noc.utils import wrap_angle
+import time
 
 # Enable 64 bit floating point precision
 config.update("jax_enable_x64", True)
@@ -70,35 +70,29 @@ def pendulum(state: jnp.ndarray, action: jnp.ndarray) -> jnp.ndarray:
     )
 
 
-simulation_step = 0.05
+simulation_step = 0.0125
 downsampling = 1
 dynamics = discretize_dynamics(
     ode=pendulum, simulation_step=simulation_step, downsampling=downsampling
 )
 
-horizon = 60
+horizon = 240
 sigma = jnp.array([0.1])
 key = jax.random.PRNGKey(1)
 u = sigma * jax.random.normal(key, shape=(horizon, 1))
-x0 = jnp.array([wrap_angle(0.1), -0.1])
-# x0 = jnp.array([0.1, -0.1])
+# x0 = jnp.array([wrap_angle(0.1), -0.1])
+x0 = jnp.array([0.1, -0.1])
 ilqr = OCP(dynamics, constraints, transient_cost, final_cost, total_cost)
 anon_par_log_barrier = lambda u, x0: par_log_barrier(ilqr, u, x0)
 anon_gn_par_log_barrier = lambda u, x0: gn_par_log_barrier(ilqr, u, x0)
 _jitted_par_log_barrier = jax.jit(anon_par_log_barrier)
-_jitted_seq_log_barrier = jax.jit(anon_gn_par_log_barrier)
-_, _ = _jitted_par_log_barrier(u, x0)
-_, _ = _jitted_gn_par_log_barrier(u, x0)
+_jitted_gn_par_log_barrier = jax.jit(anon_gn_par_log_barrier)
 
-start = time.time()
+print('Newton')
 par_x, par_u = _jitted_par_log_barrier(u, x0)
-jax.block_until_ready(par_x)
-end = time.time()
-par_log_time = end - start
 
-start = time.time()
+print('Gauss Newton')
 gn_par_x, gn_par_u = _jitted_gn_par_log_barrier(u, x0)
-jax.block_until_ready(gn_par_x)
-end = time.time()
-gn_par_log_time = end - start
-print('seq finished')
+
+plt.plot(par_x[:, 0])
+plt.show()
