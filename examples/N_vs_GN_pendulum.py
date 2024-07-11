@@ -70,13 +70,13 @@ def pendulum(state: jnp.ndarray, action: jnp.ndarray) -> jnp.ndarray:
     )
 
 
-simulation_step = 0.0125
+simulation_step = 0.001
 downsampling = 1
 dynamics = discretize_dynamics(
     ode=pendulum, simulation_step=simulation_step, downsampling=downsampling
 )
 
-horizon = 240
+horizon = 3000
 sigma = jnp.array([0.1])
 key = jax.random.PRNGKey(1)
 u = sigma * jax.random.normal(key, shape=(horizon, 1))

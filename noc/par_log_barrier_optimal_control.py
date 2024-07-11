@@ -107,6 +107,7 @@ def noc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float):
 
         temp_u = u + du
         temp_x = x + dx
+
         new_traj_feasible = check_feasibility(ocp, temp_x, temp_u)
         new_cost = jnp.where(
             new_traj_feasible, ocp.total_cost(temp_x, temp_u, bp), jnp.inf
@@ -135,12 +136,11 @@ def noc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float):
 
         t = t + 1
         # jax.debug.print("---------------------------------")
-        # jax.debug.breakpoint()
         return x, u, t, mu, nu, Hu_norm, bp_feasible
 
     def while_cond(val):
         _, _, t, _, _, Hu_norm, bp_feasible = val
-        exit_cond = jnp.logical_and(Hu_norm < 1e-4, bp_feasible)
+        exit_cond = jnp.logical_and(Hu_norm < 1e-6, bp_feasible)
         # exit_cond = jnp.logical_or(exit_cond, t > 1)
         return jnp.logical_not(exit_cond)
 
@@ -157,9 +157,9 @@ def noc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float):
         while_body,
         (states, controls, 0, mu0, nu0, jnp.array(1.0), jnp.bool(1.0)),
     )
-    jax.debug.print('Converged in {x} iterations', x=iterations)
+    # jax.debug.print('Converged in {x} iterations', x=iterations)
     # jax.debug.breakpoint()
-    return opt_x, opt_u
+    return opt_x, opt_u, iterations
 
 
 def par_log_barrier(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray):
@@ -167,21 +167,20 @@ def par_log_barrier(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray)
 
     def while_body(val):
         u, bp, t = val
-        _, u = noc(ocp, u, initial_state, bp)
+        _, u, newton_iterations = noc(ocp, u, initial_state, bp)
         bp = bp / 5
-        t = t + 1
-        # jax.debug.breakpoint()
+        t = t + newton_iterations
         return u, bp, t
 
     def while_cond(val):
         _, bp, t = val
         return bp > 1e-4
 
-    opt_u, _, t_conv = lax.while_loop(
+    opt_u, _, N_iterations = lax.while_loop(
         while_cond, while_body, (controls, barrier_param, 0)
     )
     # jax.debug.print("converged in {x}", x=t_conv)
     opt_x = rollout(ocp.dynamics, opt_u, initial_state)
     optimal_cost = ocp.total_cost(opt_x, opt_u, 0.0)
     # jax.debug.print("optimal cost {x}", x=optimal_cost)
-    return opt_x, opt_u
+    return opt_x, opt_u, N_iterations

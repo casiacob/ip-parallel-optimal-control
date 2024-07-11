@@ -154,9 +154,9 @@ def gnoc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float)
         while_body,
         (states, controls, 0, mu0, nu0, jnp.array(1.0), jnp.bool(1.0)),
     )
-    jax.debug.print('Converged in {x} iterations', x=iterations)
+    # jax.debug.print('Converged in {x} iterations', x=iterations)
     # jax.debug.breakpoint()
-    return opt_x, opt_u
+    return opt_x, opt_u, iterations
 
 
 def gn_par_log_barrier(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray):
@@ -164,9 +164,9 @@ def gn_par_log_barrier(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarr
 
     def while_body(val):
         u, bp, t = val
-        _, u = gnoc(ocp, u, initial_state, bp)
+        _, u, gauss_newton_iterations = gnoc(ocp, u, initial_state, bp)
         bp = bp / 5
-        t = t + 1
+        t = t + gauss_newton_iterations
         # jax.debug.breakpoint()
         return u, bp, t
 
@@ -174,11 +174,11 @@ def gn_par_log_barrier(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarr
         _, bp, t = val
         return bp > 1e-4
 
-    opt_u, _, t_conv = lax.while_loop(
+    opt_u, _, GN_iterations = lax.while_loop(
         while_cond, while_body, (controls, barrier_param, 0)
     )
     # jax.debug.print("converged in {x}", x=t_conv)
     opt_x = rollout(ocp.dynamics, opt_u, initial_state)
     optimal_cost = ocp.total_cost(opt_x, opt_u, 0.0)
     # jax.debug.print("optimal cost {x}", x=optimal_cost)
-    return opt_x, opt_u
+    return opt_x, opt_u, GN_iterations
