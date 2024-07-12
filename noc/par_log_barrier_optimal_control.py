@@ -140,7 +140,7 @@ def noc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float):
 
     def while_cond(val):
         _, _, t, _, _, Hu_norm, bp_feasible = val
-        exit_cond = jnp.logical_and(Hu_norm < 1e-6, bp_feasible)
+        exit_cond = jnp.logical_and(Hu_norm < 1e-4, bp_feasible)
         # exit_cond = jnp.logical_or(exit_cond, t > 1)
         return jnp.logical_not(exit_cond)
 

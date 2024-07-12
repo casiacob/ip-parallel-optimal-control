@@ -28,12 +28,16 @@ def compute_derivatives(
 
 
 def compute_lqr_params(lagrange_multipliers: jnp.ndarray, d: Derivatives):
-    def body(l, cu, fu):
+    def body(l, cu, cxx, cuu, cxu, fu, fxx, fuu, fxu):
         # lqr params
-        return cu + fu.T @ l
+        ru = cu + fu.T @ l
+        Q = cxx
+        R = cuu
+        M = cxu
+        return ru, Q, R, M
 
     return jax.vmap(body)(
-        lagrange_multipliers[1:], d.cu, d.fu
+        lagrange_multipliers[1:], d.cu, d.cxx, d.cuu, d.cxu, d.fu, d.fxx, d.fuu, d.fxu
     )
 
 
@@ -76,10 +80,9 @@ def noc_to_lqt(
 def par_solution(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray, bp: float, rp: float):
     d = compute_derivatives(ocp, x, u, bp)
     l = par_costates(ocp, x[-1], d)
-    ru = compute_lqr_params(l, d)
-    R = d.cuu
+    ru, Q, R, M = compute_lqr_params(l, d)
     R = R + jnp.kron(jnp.ones((R.shape[0], 1, 1)), rp * jnp.eye(R.shape[1]))
-    lqt = noc_to_lqt(ru, d.cxx, R, d.cxu, d.fx, d.fu)
+    lqt = noc_to_lqt(ru, Q, R, M, d.fx, d.fu)
     Kx_par, d_par, S_par, v_par, pred_reduction, convex_problem = par_bwd_pass(lqt)
     du_par, dx_par = par_fwd_pass(lqt, jnp.zeros(x[0].shape[0]), Kx_par, d_par)
     # jax.debug.breakpoint()
@@ -104,6 +107,7 @@ def gnoc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float)
 
         temp_u = u + du
         temp_x = x + dx
+
         new_traj_feasible = check_feasibility(ocp, temp_x, temp_u)
         new_cost = jnp.where(
             new_traj_feasible, ocp.total_cost(temp_x, temp_u, bp), jnp.inf
@@ -132,7 +136,6 @@ def gnoc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float)
 
         t = t + 1
         # jax.debug.print("---------------------------------")
-        # jax.debug.breakpoint()
         return x, u, t, mu, nu, Hu_norm, bp_feasible
 
     def while_cond(val):
@@ -164,21 +167,20 @@ def gn_par_log_barrier(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarr
 
     def while_body(val):
         u, bp, t = val
-        _, u, gauss_newton_iterations = gnoc(ocp, u, initial_state, bp)
+        _, u, newton_iterations = gnoc(ocp, u, initial_state, bp)
         bp = bp / 5
-        t = t + gauss_newton_iterations
-        # jax.debug.breakpoint()
+        t = t + newton_iterations
         return u, bp, t
 
     def while_cond(val):
         _, bp, t = val
         return bp > 1e-4
 
-    opt_u, _, GN_iterations = lax.while_loop(
+    opt_u, _, N_iterations = lax.while_loop(
         while_cond, while_body, (controls, barrier_param, 0)
     )
     # jax.debug.print("converged in {x}", x=t_conv)
     opt_x = rollout(ocp.dynamics, opt_u, initial_state)
     optimal_cost = ocp.total_cost(opt_x, opt_u, 0.0)
     # jax.debug.print("optimal cost {x}", x=optimal_cost)
-    return opt_x, opt_u, GN_iterations
+    return opt_x, opt_u, N_iterations

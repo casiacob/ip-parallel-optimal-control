@@ -4,15 +4,17 @@ from jax import config
 from noc.optimal_control_problem import OCP
 from noc.par_log_barrier_optimal_control import par_log_barrier
 from noc.par_log_barrier_optimal_control_gauss_newton import gn_par_log_barrier
-import matplotlib.pyplot as plt
+from noc.seq_log_barrier_optimal_control import seq_log_barrier
+from noc.seq_log_barrier_optimal_control_gauss_newton import gn_seq_log_barrier
 from noc.utils import discretize_dynamics
 from jax import lax, debug
 from noc.utils import wrap_angle
+import time
 
 # Enable 64 bit floating point precision
 config.update("jax_enable_x64", True)
 
-config.update("jax_platform_name", "cpu")
+config.update("jax_platform_name", "cuda")
 
 def constraints(state, control):
     control_ub = 50.
@@ -25,7 +27,7 @@ def constraints(state, control):
 
 def final_cost(state: jnp.ndarray) -> float:
     goal_state = jnp.array([0.0, jnp.pi, 0.0, 0.0])
-    final_state_cost = jnp.diag(jnp.array([1e1, 1e1, 1e-1, 1e-1]))
+    final_state_cost = jnp.diag(jnp.array([1e0, 1e1, 1e-1, 1e-1]))
 
     _wrapped = jnp.hstack((state[0], wrap_angle(state[1]), state[2], state[3]))
     c = (
@@ -39,7 +41,7 @@ def final_cost(state: jnp.ndarray) -> float:
 
 def transient_cost(state: jnp.ndarray, action: jnp.ndarray, bp) -> float:
     goal_state = jnp.array([0.0, jnp.pi, 0.0, 0.0])
-    state_cost = jnp.diag(jnp.array([1e1, 1e1, 1e-1, 1e-1]))
+    state_cost = jnp.diag(jnp.array([1e0, 1e1, 1e-1, 1e-1]))
     action_cost = jnp.diag(jnp.array([1e-3]))
 
     _wrapped = jnp.hstack((state[0], wrap_angle(state[1]), state[2], state[3]))
@@ -86,30 +88,96 @@ def cartpole(
         (cart_velocity, pole_velocity, cart_acceleration, pole_acceleration)
     )
 
-simulation_step = 0.01
+simulation_step = 0.05
 downsampling = 1
 dynamics = discretize_dynamics(
     ode=cartpole, simulation_step=simulation_step, downsampling=downsampling
 )
 
-horizon = 75
+horizon = 15
 key = jax.random.PRNGKey(271)
 u0 = jnp.array([0.01]) * jax.random.normal(key, shape=(horizon, 1))
 x0 = jnp.array([0.01, wrap_angle(-0.01), 0.01, -0.01])
 
 
 ilqr = OCP(dynamics, constraints, transient_cost, final_cost, total_cost)
-def par_mpc_loop(carry, input):
+def N_par_mpc_loop(carry, input):
     prev_x, prev_u = carry
     x, u, iterations = par_log_barrier(ilqr, prev_u, prev_x)
-    jax.debug.print('-----------------------------')
     return (x[1], u), (x[1], u[0], iterations)
 
-_jitted_par_mpc_loop = jax.jit(par_mpc_loop)
-_, (mpc_x_par, mpc_u_par, iterations) = jax.lax.scan(_jitted_par_mpc_loop, (x0, u0), xs=None, length=500)
-plt.plot(mpc_x_par[:, 0])
-plt.plot(mpc_x_par[:, 1])
-plt.show()
-plt.plot(mpc_u_par[:, 0])
-plt.show()
-print(jnp.sum(iterations))
+
+_jitted_N_par_mpc_loop = jax.jit(N_par_mpc_loop)
+_, _ = jax.lax.scan(_jitted_N_par_mpc_loop, (x0, u0), xs=None, length=100)
+
+
+def GN_par_mpc_loop(carry, input):
+    prev_x, prev_u = carry
+    x, u, iterations = gn_par_log_barrier(ilqr, prev_u, prev_x)
+    return (x[1], u), (x[1], u[0], iterations)
+
+
+_jitted_GN_par_mpc_loop = jax.jit(GN_par_mpc_loop)
+_, _ = jax.lax.scan(_jitted_GN_par_mpc_loop, (x0, u0), xs=None, length=100)
+
+def N_seq_mpc_loop(carry, input):
+    prev_x, prev_u = carry
+    x, u, iterations = seq_log_barrier(ilqr, prev_u, prev_x)
+    return (x[1], u), (x[1], u[0], iterations)
+
+
+_jitted_N_seq_mpc_loop = jax.jit(N_seq_mpc_loop)
+_, _ = jax.lax.scan(_jitted_N_seq_mpc_loop, (x0, u0), xs=None, length=100)
+
+
+def GN_seq_mpc_loop(carry, input):
+    prev_x, prev_u = carry
+    x, u, iterations = gn_seq_log_barrier(ilqr, prev_u, prev_x)
+    return (x[1], u), (x[1], u[0], iterations)
+
+
+_jitted_GN_seq_mpc_loop = jax.jit(GN_seq_mpc_loop)
+_, _ = jax.lax.scan(_jitted_GN_seq_mpc_loop, (x0, u0), xs=None, length=100)
+
+
+start = time.time()
+_, (N_par_mpc_x, N_par_mpc_u, N_iterations) = jax.lax.scan(_jitted_N_par_mpc_loop, (x0, u0), xs=None, length=100)
+jax.block_until_ready(N_par_mpc_x)
+end = time.time()
+N_par_time = end - start
+print('Newton parallel: ')
+print('time      ', N_par_time)
+print('iterations', jnp.sum(N_iterations))
+
+start = time.time()
+_, (GN_par_mpc_x, GN_par_mpc_u, GN_iterations) = jax.lax.scan(_jitted_GN_par_mpc_loop, (x0, u0), xs=None, length=100)
+jax.block_until_ready(GN_par_mpc_x)
+end = time.time()
+GN_par_time = end - start
+print('Gauss Newton parallel: ')
+print('time      ', GN_par_time)
+print('iterations', jnp.sum(GN_iterations))
+
+
+start = time.time()
+_, (N_seq_mpc_x, N_seq_mpc_u, N_iterations) = jax.lax.scan(_jitted_N_seq_mpc_loop, (x0, u0), xs=None, length=100)
+jax.block_until_ready(N_seq_mpc_x)
+end = time.time()
+N_seq_time = end - start
+print('Newton sequential: ')
+print('time      ', N_seq_time)
+print('iterations', jnp.sum(N_iterations))
+
+start = time.time()
+_, (GN_seq_mpc_x, GN_seq_mpc_u, GN_iterations) = jax.lax.scan(_jitted_GN_seq_mpc_loop, (x0, u0), xs=None, length=100)
+jax.block_until_ready(GN_seq_mpc_x)
+end = time.time()
+GN_seq_time = end - start
+print('Gauss Newton sequential: ')
+print('time      ', GN_seq_time)
+print('iterations', jnp.sum(GN_iterations))
+
+print(jnp.max(jnp.abs(N_par_mpc_u - GN_par_mpc_u)))
+print(jnp.max(jnp.abs(N_seq_mpc_u - GN_seq_mpc_u)))
+print(jnp.max(jnp.abs(N_par_mpc_u - N_seq_mpc_u)))
+print(jnp.max(jnp.abs(GN_par_mpc_u - GN_seq_mpc_u)))

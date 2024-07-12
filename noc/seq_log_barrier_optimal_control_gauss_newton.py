@@ -28,12 +28,16 @@ def compute_derivatives(
 
 
 def compute_lqr_params(lagrange_multipliers: jnp.ndarray, d: Derivatives):
-    def body(l, cu, fu):
+    def body(l, cu, cxx, cuu, cxu, fu, fxx, fuu, fxu):
         # lqr params
-        return cu + fu.T @ l
+        ru = cu + fu.T @ l
+        Q = cxx
+        R = cuu
+        M = cxu
+        return ru, Q, R, M
 
     return jax.vmap(body)(
-        lagrange_multipliers[1:], d.cu, d.fu
+        lagrange_multipliers[1:], d.cu, d.cxx, d.cuu, d.cxu, d.fu, d.fxx, d.fuu, d.fxu
     )
 
 
@@ -98,8 +102,8 @@ def check_feasibility(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray):
 def seq_solution(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray, bp: float, rp: float):
     d = compute_derivatives(ocp, x, u, bp)
     l = seq_costates(ocp, x[-1], d)
-    ru = compute_lqr_params(l, d)
-    lqr = LinearizedOCP(ru, d.cxx, d.cuu, d.cxu)
+    ru, Q, R, M = compute_lqr_params(l, d)
+    lqr = LinearizedOCP(ru, Q, R, M)
     K, k, dV, bp_feasible = bwd_pass(ocp.final_cost, x[-1], lqr, d, rp)
     du, dx = fwd_pass(K, k, d)
     return dx, du, dV, bp_feasible, ru
