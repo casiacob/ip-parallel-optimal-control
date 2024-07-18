@@ -44,7 +44,8 @@ def bwd_pass(
         Qxu = cxu + fx.T @ Vxx @ fu + jnp.tensordot(Vx, fxu, axes=1)
         Quu = cuu + fu.T @ Vxx @ fu + jnp.tensordot(Vx, fuu, axes=1)
         Quu = Quu + reg_param * jnp.eye(Quu.shape[0])
-        pos_def = jnp.all(jnp.linalg.eigvals(Quu) > 0)
+        eig_vals, _ = jnp.linalg.eigh(Quu)
+        pos_def = jnp.all(eig_vals > 0)
 
         k = -jcp.linalg.solve(Quu, Qu)
         K = -jcp.linalg.solve(Quu, Qxu.T)

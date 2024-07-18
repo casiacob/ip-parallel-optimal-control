@@ -322,5 +322,5 @@ def par_interior_point_optimal_control(
     # jax.debug.print("converged in {x}", x=t_conv)
     opt_x = rollout(ocp.dynamics, opt_u, initial_state)
     optimal_cost = ocp.total_cost(opt_x, opt_u, 0.0)
-    jax.debug.print("optimal cost {x}", x=optimal_cost)
+    # jax.debug.print("optimal cost {x}", x=optimal_cost)
     return opt_x, opt_u, N_iterations

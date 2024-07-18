@@ -8,11 +8,12 @@ import matplotlib.pyplot as plt
 from noc.utils import discretize_dynamics, euler
 from jax import lax, debug
 from noc.utils import wrap_angle
+import time
 
 # Enable 64 bit floating point precision
 config.update("jax_enable_x64", True)
 
-config.update("jax_platform_name", "cpu")
+config.update("jax_platform_name", "cuda")
 
 
 def constraints(state, control):
@@ -94,37 +95,47 @@ def pendulum(state: jnp.ndarray, action: jnp.ndarray) -> jnp.ndarray:
 #
 
 
-simulation_step = 0.01
+simulation_step = 0.001
 downsampling = 1
 dynamics = discretize_dynamics(
     ode=pendulum, simulation_step=simulation_step, downsampling=downsampling
 )
 # dynamics = euler(pendulum, simulation_step)
 
-horizon = 300
+horizon = 3000
 sigma = jnp.array([0.1])
 key = jax.random.PRNGKey(1)
 u = sigma * jax.random.normal(key, shape=(horizon, 1))
 x0 = jnp.array([wrap_angle(0.1), -0.1])
 nonlinear_problem = OCP(dynamics, constraints, transient_cost, final_cost, total_cost)
 reg_scheme = jnp.bool_(1.0)
-x_nonlin_rollout, u_nonlin_rollour, nonlin_rollout_iterations = (
-    par_interior_point_optimal_control(
-        nonlinear_problem, u, x0, jnp.bool_(1.0), reg_scheme
-    )
-)
-x_N, u_N, N_iterations = par_interior_point_optimal_control(
+
+
+_jitted_Newton = jax.jit(par_interior_point_optimal_control)
+_jitted_ddp = jax.jit(interior_point_ddp)
+
+_, _, _ = par_interior_point_optimal_control(
     nonlinear_problem, u, x0, jnp.bool_(0.0), reg_scheme
 )
-x_ddp, u_ddp, ddp_iterations = interior_point_ddp(nonlinear_problem, u, x0)
-print("nonlin rollout : ", nonlin_rollout_iterations)
-print("N              : ", N_iterations)
-print("ddp            : ", ddp_iterations)
-plt.plot(x_nonlin_rollout[:, 0])
-plt.plot(x_N[:, 0])
-plt.plot(x_ddp[:, 0])
-plt.show()
-plt.plot(u_nonlin_rollour)
-plt.plot(u_N)
-plt.plot(u_ddp)
-plt.show()
+_, _, _ = interior_point_ddp(nonlinear_problem, u, x0)
+
+start = time.time()
+x_N, u_N, it_N = par_interior_point_optimal_control(
+    nonlinear_problem, u, x0, jnp.bool_(0.0), reg_scheme
+)
+jax.block_until_ready(x_N)
+end = time.time()
+N_time = end - start
+
+start = time.time()
+x_ddp, u_ddp, it_ddp = interior_point_ddp(nonlinear_problem, u, x0)
+jax.block_until_ready(x_ddp)
+end = time.time()
+ddp_time = end-start
+
+print('N time  ', N_time)
+print('ddp time', ddp_time)
+
+print('N iterations', it_N)
+print('ddp iterations', it_ddp)
+
