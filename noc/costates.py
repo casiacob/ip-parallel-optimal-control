@@ -30,26 +30,13 @@ def par_init(F: jnp.ndarray, c: jnp.ndarray, x0: jnp.ndarray):
     elems = (tF, tc)
     return elems
 
-
-def par_extract(x0: jnp.ndarray, elems):
-    def extract_x(e):
-        _, tc = e
-        x = tc
-        return x
-
-    x_array = vmap(extract_x)(elems)
-    x_array = jnp.vstack((x0, x_array))
-    return x_array
-
-
 def par_costates(ocp: OCP, final_state: jnp.ndarray, d: Derivatives):
     lamda_T = grad(ocp.final_cost, 0)(final_state)
     F = jnp.transpose(d.fx[::-1, :, :], axes=(0, 2, 1))
     c = d.cx[::-1, :]
     elems = par_init(F, c, lamda_T)
     elems = par_scan(elems)
-    lamda = par_extract(lamda_T, elems)[::-1, :]
-    return lamda
+    return jnp.vstack((lamda_T, elems[1]))[::-1, :]
 
 
 def seq_costates(ocp: OCP, final_state: jnp.ndarray, d: Derivatives):
