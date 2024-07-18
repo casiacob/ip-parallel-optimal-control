@@ -2,8 +2,8 @@ import jax.numpy as jnp
 import jax.random
 from jax import config
 from noc.optimal_control_problem import OCP
-from noc.par_log_barrier_optimal_control import par_log_barrier
-from noc.seq_log_barrier_optimal_control import seq_log_barrier
+from noc.par_interior_point_newton import par_interior_point_optimal_control
+from noc.seq_interior_point_newton import seq_log_barrier
 import matplotlib.pyplot as plt
 from noc.utils import discretize_dynamics
 from jax import lax, debug
@@ -13,10 +13,12 @@ import time
 # Enable 64 bit floating point precision
 config.update("jax_enable_x64", True)
 
-config.update("jax_platform_name", "cuda")
+config.update("jax_platform_name", "cpu")
+
+
 def constraints(state, control):
-    control_ub = 5.
-    control_lb = -5.
+    control_ub = 5.0
+    control_lb = -5.0
 
     c0 = control - control_ub
     c1 = -control + control_lb
@@ -71,60 +73,58 @@ def pendulum(state: jnp.ndarray, action: jnp.ndarray) -> jnp.ndarray:
     )
 
 
-dsic_step = 0.005
+dsic_step = 0.05
 downsampling = 1
 dynamics = discretize_dynamics(
     ode=pendulum, simulation_step=dsic_step, downsampling=downsampling
 )
 
-horizon = 140
+horizon = 20
 key = jax.random.PRNGKey(1)
 u0 = 0.1 * jax.random.normal(key, shape=(horizon, 1))
 x0 = jnp.array([wrap_angle(0.1), -0.1])
 ilqr = OCP(dynamics, constraints, transient_cost, final_cost, total_cost)
 
-def seq_mpc_loop(carry, input):
+reg_scheme = jnp.bool_(1.0)
+
+
+def er_par_mpc_loop(carry, input):
     prev_x, prev_u = carry
-    x, u = seq_log_barrier(ilqr, prev_u, prev_x)
-    return (x[1], u), (x[1], u[0])
+    x, u, iterations = par_interior_point_optimal_control(
+        ilqr, prev_u, prev_x, jnp.bool_(1.0), reg_scheme
+    )
+    return (x[1], u), (x[1], u[0], iterations)
 
-def par_mpc_loop(carry, input):
+
+_jitted_er_par_mpc_loop = jax.jit(er_par_mpc_loop)
+_, (mpc_x_er, mpc_u_er, er_total_iterations) = jax.lax.scan(
+    _jitted_er_par_mpc_loop, (x0, u0), xs=None, length=100
+)
+
+
+def lf_par_mpc_loop(carry, input):
     prev_x, prev_u = carry
-    x, u = par_log_barrier(ilqr, prev_u, prev_x)
-    return (x[1], u), (x[1], u[0])
-
-_jitted_seq_mpc_loop = jax.jit(seq_mpc_loop)
-_jitted_par_mpc_loop = jax.jit(par_mpc_loop)
-
+    x, u, iterations = par_interior_point_optimal_control(
+        ilqr, prev_u, prev_x, jnp.bool_(0.0), reg_scheme
+    )
+    return (x[1], u), (x[1], u[0], iterations)
 
 
-_, (mpc_x, mpc_u) = jax.lax.scan(_jitted_seq_mpc_loop, (x0, u0), xs=None, length=800)
-start = time.time()
-_, (mpc_x_seq, mpc_u_seq) = jax.lax.scan(_jitted_seq_mpc_loop, (x0, u0), xs=None, length=800)
-jax.block_until_ready(mpc_u_seq)
-end = time.time()
-seq_time = end - start
+_jitted_lf_par_mpc_loop = jax.jit(lf_par_mpc_loop)
+_, (mpc_x_lf, mpc_u_lf, lf_total_iterations) = jax.lax.scan(
+    _jitted_lf_par_mpc_loop, (x0, u0), xs=None, length=100
+)
 
-_, (mpc_x, mpc_u) = jax.lax.scan(_jitted_par_mpc_loop, (x0, u0), xs=None, length=800)
-start = time.time()
-_, (mpc_x_par, mpc_u_par) = jax.lax.scan(_jitted_par_mpc_loop, (x0, u0), xs=None, length=800)
-jax.block_until_ready(mpc_u_par)
-end = time.time()
-par_time = end - start
+plt.plot(mpc_x_er[:, 0])
+plt.plot(mpc_x_lf[:, 0])
+plt.show()
 
+plt.plot(mpc_u_er)
+plt.plot(mpc_u_lf)
+plt.show()
 
-print('Sequential time: ', seq_time)
-print('Parallel time  : ', par_time)
-print('par vs seq solution')
-print('u: ', jnp.max(jnp.abs(mpc_u_par - mpc_u_seq)))
-print('x_1: ', jnp.max(jnp.abs(mpc_x_par[:, 0] - mpc_x_seq[:, 0])))
-print('x_2: ', jnp.max(jnp.abs(mpc_x_par[:, 1] - mpc_x_seq[:, 1])))
-#######################################################################################################################
-
-plt.plot(mpc_x_seq[:, 0], label='angle seq')
-plt.plot(mpc_x_par[:, 0], label='angle par')
-# # plt.show()
-plt.plot(mpc_u_seq, label='control seq')
-plt.plot(mpc_u_par, label='control par')
+plt.plot(er_total_iterations, label="exact rollout")
+plt.plot(lf_total_iterations, label="lienar fwd pass")
+plt.grid(which="both")
 plt.legend()
 plt.show()

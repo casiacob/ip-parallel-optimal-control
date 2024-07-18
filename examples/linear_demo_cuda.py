@@ -2,9 +2,10 @@ import jax.numpy as jnp
 import jax.random
 from jax import config
 from noc.optimal_control_problem import OCP
-from noc.newton_oc import noc
 import matplotlib.pyplot as plt
 from noc.utils import discretize_dynamics
+from noc.par_interior_point_newton import par_interior_point_optimal_control
+from noc.differential_dynamic_programming import interior_point_ddp
 import jax
 
 # Enable 64 bit floating point precision
@@ -12,7 +13,7 @@ config.update("jax_enable_x64", True)
 # config.update("jax_disable_jit", True)
 
 # We use the CPU instead of GPU und mute all warnings if no GPU/TPU is found.
-config.update("jax_platform_name", "cuda")
+config.update("jax_platform_name", "cpu")
 
 
 def ode(state: jnp.ndarray, control: jnp.ndarray):
@@ -54,9 +55,23 @@ u = 0.0 * jax.random.normal(key, shape=(horizon, 1))
 lqr = OCP(dynamics, constraints, stage_cost, final_cost, total_cost)
 barrier_param = 0.0
 
-x_noc, u_noc = noc(lqr, u, x0, barrier_param)
-plt.plot(x_noc[:, 0])
-plt.plot(x_noc[:, 1])
+reg_scheme = jnp.bool_(1.0)
+x_nonlin_rollout, u_nonlin_rollour, nonlin_rollout_iterations = (
+    par_interior_point_optimal_control(lqr, u, x0, jnp.bool_(1.0), reg_scheme)
+)
+x_N, u_N, N_iterations = par_interior_point_optimal_control(
+    lqr, u, x0, jnp.bool_(0.0), reg_scheme
+)
+x_ddp, u_ddp, ddp_iterations = interior_point_ddp(lqr, u, x0)
+
+print("nonlin rollout : ", nonlin_rollout_iterations)
+print("N              : ", N_iterations)
+print("ddp            : ", ddp_iterations)
+plt.plot(x_nonlin_rollout[:, 0])
+plt.plot(x_N[:, 0])
+plt.plot(x_ddp[:, 0])
 plt.show()
-plt.plot(u_noc)
+plt.plot(u_nonlin_rollour)
+plt.plot(u_N)
+plt.plot(u_ddp)
 plt.show()

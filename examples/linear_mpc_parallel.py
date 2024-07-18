@@ -15,10 +15,11 @@ config.update("jax_enable_x64", True)
 # We use the CPU instead of GPU und mute all warnings if no GPU/TPU is found.
 config.update("jax_platform_name", "cuda")
 
-_jitted_par_bwd_pass = jax.jit(par_bwd_pass, backend='gpu')
-_jitted_par_fwd_pass = jax.jit(par_fwd_pass, backend='gpu')
-_jitted_seq_bwd_pass = jax.jit(seq_bwd_pass, backend='gpu')
-_jitted_seq_fwd_pass = jax.jit(seq_fwd_pass, backend='gpu')
+_jitted_par_bwd_pass = jax.jit(par_bwd_pass, backend="gpu")
+_jitted_par_fwd_pass = jax.jit(par_fwd_pass, backend="gpu")
+_jitted_seq_bwd_pass = jax.jit(seq_bwd_pass, backend="gpu")
+_jitted_seq_fwd_pass = jax.jit(seq_fwd_pass, backend="gpu")
+
 
 def ode(state: jnp.ndarray, control: jnp.ndarray):
     A = jnp.array([[0.0, 1.0], [0.0, 0.0]])
@@ -33,8 +34,8 @@ dynamics = discretize_dynamics(ode, step, downsampling)
 x0 = jnp.array([2.0, 1.0])
 
 
-A = jax.jacfwd(dynamics, 0)(x0, jnp.array([0.]))
-B = jax.jacfwd(dynamics, 1)(x0, jnp.array([0.]))
+A = jax.jacfwd(dynamics, 0)(x0, jnp.array([0.0]))
+B = jax.jacfwd(dynamics, 1)(x0, jnp.array([0.0]))
 
 
 T = 5
@@ -63,31 +64,40 @@ M = jnp.kron(jnp.ones((T, 1, 1)), M)
 lqt = LQT(A, B, c, XT, HT, rT, Q, H, r, R, Z, s, M)
 
 
-
 def par_mpc_loop(prev_x, inp):
     Kx_par, d_par, _, _, _, _ = _jitted_par_bwd_pass(lqt)
     u_par, x_par = _jitted_par_fwd_pass(lqt, prev_x, Kx_par, d_par)
     return x_par[1], (x_par[1], u_par[0])
+
 
 def seq_mpc_loop(prev_x, inp):
     Kx_seq, d_seq, _, _ = _jitted_seq_bwd_pass(lqt)
     u_seq, x_seq = _jitted_seq_fwd_pass(lqt, prev_x, Kx_seq, d_seq)
     return x_seq[1], (x_seq[1], u_seq[0])
 
-_, (mpc_x_par, mpc_u_par) = jax.lax.scan(par_mpc_loop, x0, xs=None, length=mpc_sim_steps)
-_, (mpc_x_seq, mpc_u_seq) = jax.lax.scan(seq_mpc_loop, x0, xs=None, length=mpc_sim_steps)
+
+_, (mpc_x_par, mpc_u_par) = jax.lax.scan(
+    par_mpc_loop, x0, xs=None, length=mpc_sim_steps
+)
+_, (mpc_x_seq, mpc_u_seq) = jax.lax.scan(
+    seq_mpc_loop, x0, xs=None, length=mpc_sim_steps
+)
 
 start = time.time()
-_, (mpc_x_par, mpc_u_par) = jax.lax.scan(par_mpc_loop, x0, xs=None, length=mpc_sim_steps)
+_, (mpc_x_par, mpc_u_par) = jax.lax.scan(
+    par_mpc_loop, x0, xs=None, length=mpc_sim_steps
+)
 jax.block_until_ready(mpc_x_par)
 end = time.time()
-print(end-start)
+print(end - start)
 
 start = time.time()
-_, (mpc_x_seq, mpc_u_seq) = jax.lax.scan(seq_mpc_loop, x0, xs=None, length=mpc_sim_steps)
+_, (mpc_x_seq, mpc_u_seq) = jax.lax.scan(
+    seq_mpc_loop, x0, xs=None, length=mpc_sim_steps
+)
 jax.block_until_ready(mpc_x_seq)
 end = time.time()
-print(end-start)
+print(end - start)
 
 plt.plot(mpc_x_seq[:, 0])
 plt.plot(mpc_x_par[:, 0])

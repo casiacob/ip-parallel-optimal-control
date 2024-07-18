@@ -2,8 +2,8 @@ import jax.numpy as jnp
 import jax.random
 from jax import config
 from noc.optimal_control_problem import OCP
-from noc.par_log_barrier_optimal_control import par_log_barrier
-from noc.seq_log_barrier_optimal_control import seq_log_barrier
+from noc.par_interior_point_newton import par_log_barrier
+from noc.seq_interior_point_newton import seq_log_barrier
 from noc.utils import discretize_dynamics, rollout
 import jax
 import time
@@ -14,6 +14,7 @@ config.update("jax_enable_x64", True)
 # config.update("jax_disable_jit", True)
 
 config.update("jax_platform_name", "cuda")
+
 
 def ode(state: jnp.ndarray, control: jnp.ndarray):
     A = jnp.array([[0.0, 1.0], [0.0, 0.0]])
@@ -46,8 +47,8 @@ def total_cost(states: jnp.ndarray, controls: jnp.ndarray, bp: float):
     return cT + jnp.sum(ct)
 
 
-#Ts = [0.1, 0.05, 0.025, 0.0125, 0.01, 0.005, 0.0025, 0.00125, 0.001]
-#N = [60, 120, 240, 480, 600, 1200, 2400, 4800, 6000]
+# Ts = [0.1, 0.05, 0.025, 0.0125, 0.01, 0.005, 0.0025, 0.00125, 0.001]
+# N = [60, 120, 240, 480, 600, 1200, 2400, 4800, 6000]
 Ts = [0.1, 0.05, 0.025, 0.0125, 0.01, 0.005, 0.0025, 0.00125]
 N = [60, 120, 240, 480, 600, 1200, 2400, 4800]
 seq_time_means = []
@@ -63,7 +64,7 @@ for sampling_period, horizon in zip(Ts, N):
 
     x0 = jnp.array([2.0, 1.0])
     key = jax.random.PRNGKey(1)
-    u = 0. * jax.random.normal(key, shape=(horizon, 1))
+    u = 0.0 * jax.random.normal(key, shape=(horizon, 1))
     linear_problem = OCP(dynamics, constraints, stage_cost, final_cost, total_cost)
 
     anon_par_log_barrier = lambda u, x0: par_log_barrier(linear_problem, u, x0)
@@ -80,14 +81,14 @@ for sampling_period, horizon in zip(Ts, N):
         jax.block_until_ready(par_x)
         end = time.time()
         par_log_time = end - start
-        print('par finished')
+        print("par finished")
 
         start = time.time()
         seq_x, seq_u = _jitted_seq_log_barrier(u, x0)
         jax.block_until_ready(seq_x)
         end = time.time()
         seq_log_time = end - start
-        print('seq finished')
+        print("seq finished")
 
         seq_time_Ts.append(seq_log_time)
         par_time_Ts.append(par_log_time)
@@ -111,5 +112,3 @@ df_mean_seq.to_csv("log_seq_means.csv")
 df_median_seq.to_csv("log_seq_median.csv")
 df_mean_par.to_csv("log_par_means.csv")
 df_median_par.to_csv("log_par_median.csv")
-
-

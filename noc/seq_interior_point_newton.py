@@ -2,8 +2,6 @@ import jax.numpy as jnp
 from jax import grad, jacrev, lax, hessian
 import jax
 from noc.optimal_control_problem import OCP, Derivatives, LinearizedOCP
-from paroc import par_bwd_pass, par_fwd_pass
-from paroc.lqt_problem import LQT
 from noc.utils import rollout
 from typing import Callable
 from noc.costates import seq_costates
@@ -31,15 +29,14 @@ def compute_lqr_params(lagrange_multipliers: jnp.ndarray, d: Derivatives):
     def body(l, cu, cxx, cuu, cxu, fu, fxx, fuu, fxu):
         # lqr params
         ru = cu + fu.T @ l
-        Q = cxx
-        R = cuu
-        M = cxu
+        Q = cxx + jnp.tensordot(l, fxx, axes=1)
+        R = cuu + jnp.tensordot(l, fuu, axes=1)
+        M = cxu + jnp.tensordot(l, fxu, axes=1)
         return ru, Q, R, M
 
     return jax.vmap(body)(
         lagrange_multipliers[1:], d.cu, d.cxx, d.cuu, d.cxu, d.fu, d.fxx, d.fuu, d.fxu
     )
-
 
 
 def bwd_pass(
@@ -98,7 +95,6 @@ def check_feasibility(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray):
     return jnp.all(cons <= 0)
 
 
-
 def seq_solution(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray, bp: float, rp: float):
     d = compute_derivatives(ocp, x, u, bp)
     l = seq_costates(ocp, x[-1], d)
@@ -109,7 +105,7 @@ def seq_solution(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray, bp: float, rp: float)
     return dx, du, dV, bp_feasible, ru
 
 
-def gnoc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float):
+def newton_oc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float):
     states = rollout(ocp.dynamics, controls, initial_state)
     mu0 = 1.0
     nu0 = 2.0
@@ -181,12 +177,12 @@ def gnoc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: float)
     return opt_x, opt_u, iterations
 
 
-def gn_seq_log_barrier(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray):
+def seq_log_barrier(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray):
     barrier_param = 0.1
 
     def while_body(val):
         u, bp, t = val
-        _, u, newton_iterations = gnoc(ocp, u, initial_state, bp)
+        _, u, newton_iterations = newton_oc(ocp, u, initial_state, bp)
         bp = bp / 5
         t = t + newton_iterations
         # jax.debug.breakpoint()

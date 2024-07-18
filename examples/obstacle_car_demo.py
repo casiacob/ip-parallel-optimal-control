@@ -13,7 +13,6 @@ config.update("jax_enable_x64", True)
 config.update("jax_platform_name", "cuda")
 
 
-
 def transient_cost(state: jnp.ndarray, control: jnp.ndarray, bp) -> float:
     state_penalty = jnp.diag(jnp.array([1e-16, 1.0, 5.0, 1.0]))
     control_penalty = jnp.diag(jnp.array([1.0, 10.0]))
@@ -21,7 +20,7 @@ def transient_cost(state: jnp.ndarray, control: jnp.ndarray, bp) -> float:
     c = (state - ref).T @ state_penalty @ (state - ref)
     c = c + control.T @ control_penalty @ control
     log_barrier = jnp.sum(jnp.log(-constraints(state, control)))
-    return c * 0.5 - bp*log_barrier
+    return c * 0.5 - bp * log_barrier
 
 
 def final_cost(state: jnp.ndarray) -> float:
@@ -29,6 +28,7 @@ def final_cost(state: jnp.ndarray) -> float:
     ref = jnp.array([0.0, 0.0, 8.0, 0.0])
     c = (state - ref).T @ state_penalty @ (state - ref)
     return c * 0.5
+
 
 def total_cost(states: jnp.ndarray, controls: jnp.ndarray, bp: float):
     ct = jax.vmap(transient_cost, in_axes=(0, 0, None))(states[:-1], controls, bp)
@@ -75,13 +75,15 @@ def car(state: jnp.ndarray, control: jnp.ndarray):
     lr = 1.85
     x, y, v, phi = state
     acceleration, steering = control
-    beta = jnp.arctan(jnp.tan(steering * (lr/(lf+lr))))
-    return jnp.hstack((
-        v * jnp.cos(phi + beta),
-        v * jnp.sin(phi + beta),
-        acceleration,
-        v/lr * jnp.sin(beta)
-    ))
+    beta = jnp.arctan(jnp.tan(steering * (lr / (lf + lr))))
+    return jnp.hstack(
+        (
+            v * jnp.cos(phi + beta),
+            v * jnp.sin(phi + beta),
+            acceleration,
+            v / lr * jnp.sin(beta),
+        )
+    )
 
 
 simulation_step = 0.1
@@ -99,7 +101,7 @@ u = mean + sigma * jax.random.normal(key, shape=(N, 2))
 
 ilqr = OCP(dynamics, constraints, transient_cost, final_cost, total_cost)
 x_noc, u_noc = cnoc(ilqr, u, x0)
-plt.plot(x_noc[:, 0],x_noc[:, 1])
+plt.plot(x_noc[:, 0], x_noc[:, 1])
 plt.ylim([-10, 10])
 cx1 = 17.0
 cy1 = -1.0
