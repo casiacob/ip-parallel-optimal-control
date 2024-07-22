@@ -13,7 +13,7 @@ import time
 # Enable 64 bit floating point precision
 config.update("jax_enable_x64", True)
 
-config.update("jax_platform_name", "cuda")
+config.update("jax_platform_name", "cpu")
 
 
 def constraints(state, control):
@@ -108,21 +108,20 @@ key = jax.random.PRNGKey(1)
 u = sigma * jax.random.normal(key, shape=(horizon, 1))
 x0 = jnp.array([wrap_angle(0.1), -0.1])
 nonlinear_problem = OCP(dynamics, constraints, transient_cost, final_cost, total_cost)
-reg_scheme = jnp.bool_(1.0)
 
 annon_par_Newton = lambda init_u, init_x0: par_interior_point_optimal_control(
-    nonlinear_problem, init_u, init_x0, reg_scheme
+    nonlinear_problem, init_u, init_x0
 )
 # annon_ddp = lambda init_u, init_x0:  interior_point_ddp(nonlinear_problem, init_u, init_x0)
 _jitted_Newton = jax.jit(annon_par_Newton)
 # _jitted_ddp = jax.jit(annon_ddp)
 
-_, _, _ = _jitted_Newton(u, x0)
+_, _ = _jitted_Newton(u, x0)
 # _, _, _ = _jitted_ddp(u, x0)
 
 start = time.time()
-x_N, u_N, it_N = _jitted_Newton(u, x0)
-jax.block_until_ready(x_N)
+u_N, it_N = _jitted_Newton(u, x0)
+jax.block_until_ready(u_N)
 end = time.time()
 N_time = end - start
 
