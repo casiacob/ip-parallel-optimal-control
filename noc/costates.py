@@ -30,6 +30,7 @@ def par_init(F: jnp.ndarray, c: jnp.ndarray, x0: jnp.ndarray):
     elems = (tF, tc)
     return elems
 
+
 def par_costates(ocp: OCP, final_state: jnp.ndarray, d: Derivatives):
     lamda_T = grad(ocp.final_cost, 0)(final_state)
     F = jnp.transpose(d.fx[::-1, :, :], axes=(0, 2, 1))

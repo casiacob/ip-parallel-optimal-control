@@ -11,7 +11,7 @@ from noc.costates import par_costates
 
 
 def compute_derivatives(
-        ocp: OCP, states: jnp.ndarray, controls: jnp.ndarray, bp: float
+    ocp: OCP, states: jnp.ndarray, controls: jnp.ndarray, bp: float
 ):
     def body(x, u):
         cx_k, cu_k = grad(ocp.stage_cost, (0, 1))(x, u, bp)
@@ -46,13 +46,14 @@ def check_traj_feasibility(ocp: OCP, x: jnp.ndarray, u: jnp.ndarray):
     cons = jax.vmap(ocp.constraints)(x[:-1], u)
     return jnp.all(cons <= 0)
 
+
 def noc_to_lqt(
-        ru: jnp.ndarray,
-        Q: jnp.ndarray,
-        R: jnp.ndarray,
-        M: jnp.ndarray,
-        A: jnp.ndarray,
-        B: jnp.ndarray,
+    ru: jnp.ndarray,
+    Q: jnp.ndarray,
+    R: jnp.ndarray,
+    M: jnp.ndarray,
+    A: jnp.ndarray,
+    B: jnp.ndarray,
 ):
     T = Q.shape[0]
     nx = Q.shape[1]
@@ -84,11 +85,11 @@ def noc_to_lqt(
 
 
 def nonlin_rollout(
-        ocp: OCP,
-        gain: jnp.ndarray,
-        ffgain: jnp.ndarray,
-        nominal_states: jnp.ndarray,
-        nominal_controls: jnp.ndarray,
+    ocp: OCP,
+    gain: jnp.ndarray,
+    ffgain: jnp.ndarray,
+    nominal_states: jnp.ndarray,
+    nominal_controls: jnp.ndarray,
 ):
     def body(x_hat, inp):
         K, k, x, u = inp
@@ -104,13 +105,13 @@ def nonlin_rollout(
 
 
 def par_Newton(
-        nominal_states: jnp.ndarray,
-        d: Derivatives,
-        reg_param: float,
-        ru: jnp.ndarray,
-        Q: jnp.ndarray,
-        R: jnp.ndarray,
-        M: jnp.ndarray,
+    nominal_states: jnp.ndarray,
+    d: Derivatives,
+    reg_param: float,
+    ru: jnp.ndarray,
+    Q: jnp.ndarray,
+    R: jnp.ndarray,
+    M: jnp.ndarray,
 ):
     grad_cost_norm = jnp.linalg.norm(d.cu)
     reg_param = reg_param * grad_cost_norm
@@ -122,11 +123,12 @@ def par_Newton(
     )
     return dx_par, du_par, pred_reduction, feasible, ru
 
+
 def newton_oc(
-        ocp: OCP,
-        controls: jnp.ndarray,
-        initial_state: jnp.ndarray,
-        barrier_param: float,
+    ocp: OCP,
+    controls: jnp.ndarray,
+    initial_state: jnp.ndarray,
+    barrier_param: float,
 ):
     states = rollout(ocp.dynamics, controls, initial_state)
     initial_reg_param = 1.0
@@ -147,7 +149,7 @@ def newton_oc(
         ru, Q, R, M = compute_lqr_params(costates, derivatives)
 
         def while_inner_loop(inner_val):
-            _, _, _, _, rp, r_inc = inner_val
+            _, _, _, _, rp, r_inc, inner_it_counter = inner_val
             dx, du, predicted_reduction, bwd_pass_feasible, Hu = par_Newton(
                 x, derivatives, rp, ru, Q, R, M
             )
@@ -161,7 +163,7 @@ def newton_oc(
             )
             actual_reduction = new_cost - cost
             gain_ratio = actual_reduction / predicted_reduction
-            succesful_minimzation = jnp.logical_and(gain_ratio > 0., bwd_pass_feasible)
+            succesful_minimzation = jnp.logical_and(gain_ratio > 0.0, bwd_pass_feasible)
             rp = jnp.where(
                 succesful_minimzation,
                 rp * jnp.maximum(1.0 / 3.0, 1.0 - (2.0 * gain_ratio - 1.0) ** 3),
@@ -169,14 +171,21 @@ def newton_oc(
             )
             r_inc = jnp.where(succesful_minimzation, 2.0, 2 * r_inc)
             rp = jnp.clip(rp, 1e-16, 1e16)
-            return temp_x, temp_u, succesful_minimzation, Hu_norm, rp, r_inc
+            inner_it_counter += 1
+            return temp_x, temp_u, succesful_minimzation, Hu_norm, rp, r_inc, inner_it_counter
 
         def while_inner_cond(inner_val):
-            _, _, succesful_minimzation, _, _, _ = inner_val
-            return jnp.logical_not(succesful_minimzation)
+            _, _, succesful_minimzation, _, _, _, inner_it_counter = inner_val
+            exit_cond = jnp.logical_or(
+                succesful_minimzation, inner_it_counter > 500
+            )
+            return jnp.logical_not(exit_cond)
 
-        x, u, _, Hamiltonian_norm, reg_param, reg_inc = lax.while_loop(while_inner_cond, while_inner_loop,
-                                                              (x, u, jnp.bool_(0.), 0., reg_param, reg_inc))
+        x, u, _, Hamiltonian_norm, reg_param, reg_inc, _ = lax.while_loop(
+            while_inner_cond,
+            while_inner_loop,
+            (x, u, jnp.bool_(0.0), 0.0, reg_param, reg_inc, 0),
+        )
 
         # jax.debug.print("a red:        {x}", x=actual_reduction)
         # jax.debug.print("p red         {x}", x=predicted_reduction)
@@ -189,9 +198,7 @@ def newton_oc(
 
     def while_cond(val):
         _, _, iteration_counter, _, _, Hamiltonian_norm = val
-        exit_cond = jnp.logical_or(
-            Hamiltonian_norm < 1e-4, iteration_counter > 1000
-        )
+        exit_cond = jnp.logical_or(Hamiltonian_norm < 1e-4, iteration_counter > 1000)
         return jnp.logical_not(exit_cond)
 
     (
@@ -219,17 +226,15 @@ def newton_oc(
 
 
 def par_interior_point_optimal_control(
-        ocp: OCP,
-        controls: jnp.ndarray,
-        initial_state: jnp.ndarray,
+    ocp: OCP,
+    controls: jnp.ndarray,
+    initial_state: jnp.ndarray,
 ):
     initial_barrier_param = 0.1
 
     def while_body(val):
         u, barrier_param, total_newton_iterations = val
-        _, u, newton_iterations = newton_oc(
-            ocp, u, initial_state, barrier_param
-        )
+        _, u, newton_iterations = newton_oc(ocp, u, initial_state, barrier_param)
         barrier_param = barrier_param / 5
         total_newton_iterations = total_newton_iterations + newton_iterations
         # jax.debug.breakpoint()

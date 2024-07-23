@@ -103,56 +103,74 @@ def ddp(
     initial_reg_inc = 2.0
 
     def while_body(val):
-        x, u, iterations, reg_param, reg_inc, _, _ = val
+        x, u, iterations, reg_param, reg_inc, _ = val
         # jax.debug.print("Iteration:    {x}", x=iterations)
 
         cost = ocp.total_cost(x, u, barrier_param)
         # jax.debug.print("cost:         {x}", x=cost)
 
-        d = compute_derivatives(ocp, x, u, barrier_param)
+        derivatives = compute_derivatives(ocp, x, u, barrier_param)
 
-        ffgain, gain, pred_reduction, feasible_bwd_pass, Hu = bwd_pass(
-            ocp.final_cost, x[-1], d, reg_param
-        )
-        temp_x, temp_u = nonlin_rollout(ocp, gain, ffgain, x, u)
+        def while_inner_loop(inner_val):
+            _, _, _, _, rp, r_inc, inner_it_counter = inner_val
+            ffgain, gain, pred_reduction, feasible_bwd_pass, Hu = bwd_pass(
+                ocp.final_cost, x[-1], derivatives, rp
+            )
+            temp_x, temp_u = nonlin_rollout(ocp, gain, ffgain, x, u)
+            Hu_norm = jnp.max(jnp.abs(Hu))
+            new_cost = jnp.where(
+                check_feasibility(ocp, temp_x, temp_u),
+                ocp.total_cost(temp_x, temp_u, barrier_param),
+                jnp.inf,
+            )
+            actual_reduction = new_cost - cost
+            gain_ratio = actual_reduction / pred_reduction
+            succesful_minimzation = jnp.logical_and(gain_ratio > 0, feasible_bwd_pass)
+            rp = jnp.where(
+                succesful_minimzation,
+                rp * jnp.maximum(1.0 / 3.0, 1.0 - (2.0 * gain_ratio - 1.0) ** 3),
+                rp * reg_inc,
+            )
+            r_inc = jnp.where(succesful_minimzation, 2.0, 2 * r_inc)
+            rp = jnp.clip(rp, 1e-16, 1e16)
+            inner_it_counter += 1
+            return (
+                temp_x,
+                temp_u,
+                succesful_minimzation,
+                Hu_norm,
+                rp,
+                r_inc,
+                inner_it_counter,
+            )
 
-        Hu_norm = jnp.linalg.norm(Hu)
-        new_traj_feasible = check_feasibility(ocp, temp_x, temp_u)
-        new_cost = jnp.where(
-            new_traj_feasible, ocp.total_cost(temp_x, temp_u, barrier_param), jnp.inf
-        )
-        # jax.debug.print("new cost:     {x}", x=new_cost)
-        # jax.debug.print("bp feasible:  {x}", x=feasible_bwd_pass)
+        def while_inner_cond(inner_val):
+            _, _, succesful_minimzation, _, _, _, inner_it_counter = inner_val
+            exit_cond = jnp.logical_or(
+                succesful_minimzation, inner_it_counter > 500
+            )
+            return jnp.logical_not(exit_cond)
 
-        actual_reduction = new_cost - cost
-        gain_ratio = actual_reduction / pred_reduction
-        # jax.debug.print("gain ratio:   {x}", x=gain_ratio)
-        accept_cond = jnp.logical_and(gain_ratio > 0, feasible_bwd_pass)
-        reg_param = jnp.where(
-            accept_cond,
-            reg_param * jnp.maximum(1.0 / 3.0, 1.0 - (2.0 * gain_ratio - 1.0) ** 3),
-            reg_param * reg_inc,
+        x, u, _, Hamiltonian_norm, reg_param, reg_inc, _ = lax.while_loop(
+            while_inner_cond,
+            while_inner_loop,
+            (x, u, jnp.bool_(0.0), 0.0, reg_param, reg_inc, 0),
         )
-        reg_param = jnp.clip(reg_param, 1e-16, 1e16)
-        reg_inc = jnp.where(accept_cond, 2.0, 2 * reg_inc)
-        x = jnp.where(accept_cond, temp_x, x)
-        u = jnp.where(accept_cond, temp_u, u)
         # jax.debug.print("accept:       {x}", x=accept_cond)
         # jax.debug.print("|H_u|:        {x}", x=Hu_norm)
 
         iterations = iterations + 1
         # jax.debug.print("---------------------------------")
         # jax.debug.breakpoint()
-        return x, u, iterations, reg_param, reg_inc, Hu_norm, feasible_bwd_pass
+        return x, u, iterations, reg_param, reg_inc, Hamiltonian_norm
 
     def while_cond(val):
-        _, _, iterations, _, _, Hu_norm, bp_feasible = val
-        exit_cond = jnp.logical_and(Hu_norm < 1e-4, bp_feasible)
-        exit_cond = jnp.logical_or(exit_cond, iterations > 1000)
+        _, _, iterations, _, _, Hu_norm = val
+        exit_cond = jnp.logical_or(Hu_norm < 1e-4, iterations > 500)
         # jax.debug.breakpoint()
         return jnp.logical_not(exit_cond)
 
-    (opt_states, opt_controls, total_iterations, _, _, _, _) = lax.while_loop(
+    opt_states, opt_controls, total_iterations, _, _, _ = lax.while_loop(
         while_cond,
         while_body,
         (
@@ -162,7 +180,6 @@ def ddp(
             initial_reg_param,
             initial_reg_inc,
             jnp.array(1.0),
-            jnp.bool_(1.0),
         ),
     )
 
@@ -188,7 +205,4 @@ def interior_point_ddp(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarr
         while_cond, while_body, (controls, barrier_param, 0)
     )
     # jax.debug.print("converged in {x}", x=t_conv)
-    opt_x = rollout(ocp.dynamics, opt_u, initial_state)
-    optimal_cost = ocp.total_cost(opt_x, opt_u, 0.0)
-    jax.debug.print("optimal cost {x}", x=optimal_cost)
-    return opt_x, opt_u, N_iterations
+    return opt_u, N_iterations

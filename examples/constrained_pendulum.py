@@ -102,7 +102,7 @@ simulation_step = 0.001
 # )
 dynamics = euler(pendulum, simulation_step)
 
-horizon = 1000
+horizon = 3000
 sigma = jnp.array([0.1])
 key = jax.random.PRNGKey(1)
 u = sigma * jax.random.normal(key, shape=(horizon, 1))
@@ -112,12 +112,14 @@ nonlinear_problem = OCP(dynamics, constraints, transient_cost, final_cost, total
 annon_par_Newton = lambda init_u, init_x0: par_interior_point_optimal_control(
     nonlinear_problem, init_u, init_x0
 )
-# annon_ddp = lambda init_u, init_x0:  interior_point_ddp(nonlinear_problem, init_u, init_x0)
+annon_ddp = lambda init_u, init_x0: interior_point_ddp(
+    nonlinear_problem, init_u, init_x0
+)
 _jitted_Newton = jax.jit(annon_par_Newton)
-# _jitted_ddp = jax.jit(annon_ddp)
+_jitted_ddp = jax.jit(annon_ddp)
 
 _, _ = _jitted_Newton(u, x0)
-# _, _, _ = _jitted_ddp(u, x0)
+_, _ = _jitted_ddp(u, x0)
 
 start = time.time()
 u_N, it_N = _jitted_Newton(u, x0)
@@ -125,14 +127,18 @@ jax.block_until_ready(u_N)
 end = time.time()
 N_time = end - start
 
-# start = time.time()
-# x_ddp, u_ddp, it_ddp = _jitted_ddp(u, x0)
-# jax.block_until_ready(x_ddp)
-# end = time.time()
-# ddp_time = end-start
+start = time.time()
+u_ddp, it_ddp = _jitted_ddp(u, x0)
+jax.block_until_ready(u_ddp)
+end = time.time()
+ddp_time = end - start
 
 print("N time  ", N_time)
-# print('ddp time', ddp_time)
+print("ddp time", ddp_time)
 
 print("N iterations", it_N)
-# print('ddp iterations', it_ddp)
+print("ddp iterations", it_ddp)
+
+plt.plot(u_N)
+plt.plot(u_ddp)
+plt.show()
