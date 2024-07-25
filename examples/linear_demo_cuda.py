@@ -13,7 +13,7 @@ config.update("jax_enable_x64", True)
 # config.update("jax_disable_jit", True)
 
 # We use the CPU instead of GPU und mute all warnings if no GPU/TPU is found.
-config.update("jax_platform_name", "cpu")
+config.update("jax_platform_name", "cuda")
 
 
 def ode(state: jnp.ndarray, control: jnp.ndarray):

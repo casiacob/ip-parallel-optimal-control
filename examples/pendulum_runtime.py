@@ -9,11 +9,12 @@ from noc.utils import discretize_dynamics, euler
 from jax import lax, debug
 from noc.utils import wrap_angle
 import time
+import pandas as pd
 
 # Enable 64 bit floating point precision
 config.update("jax_enable_x64", True)
 
-config.update("jax_platform_name", "cpu")
+config.update("jax_platform_name", "cuda")
 
 
 def constraints(state, control):
@@ -77,68 +78,76 @@ def pendulum(state: jnp.ndarray, action: jnp.ndarray) -> jnp.ndarray:
     )
 
 
-# def pendulum(state: jnp.ndarray, action: jnp.ndarray) -> jnp.ndarray:
-#     #roulet
-#     gravity = 10.0
-#     length = 1.0
-#     mass = 1.0
-#     damping = 1e-2
-#
-#     position, velocity = state
-#     return jnp.hstack(
-#         (
-#             velocity,
-#             -gravity / length * jnp.sin(position)
-#             + (action - damping * velocity) / (mass * length**2),
-#         )
-#     )
-#
-
-
-simulation_step = 0.001
 # downsampling = 1
 # dynamics = discretize_dynamics(
 #     ode=pendulum, simulation_step=simulation_step, downsampling=downsampling
 # )
-dynamics = euler(pendulum, simulation_step)
 
-horizon = 3000
-sigma = jnp.array([0.1])
-key = jax.random.PRNGKey(1)
-u = sigma * jax.random.normal(key, shape=(horizon, 1))
-x0 = jnp.array([wrap_angle(0.1), -0.1])
-nonlinear_problem = OCP(dynamics, constraints, transient_cost, final_cost, total_cost)
+Ts = [0.05, 0.025, 0.0125, 0.01, 0.005, 0.0025, 0.00125, 0.001]
+N = [20, 40, 80, 100, 200, 400, 800, 1000]
+ddp_time_means = []
+ddp_time_medians = []
+par_time_means = []
+par_time_medians = []
 
-annon_par_Newton = lambda init_u, init_x0: par_interior_point_optimal_control(
-    nonlinear_problem, init_u, init_x0
-)
-annon_ddp = lambda init_u, init_x0: interior_point_ddp(
-    nonlinear_problem, init_u, init_x0
-)
-_jitted_Newton = jax.jit(annon_par_Newton)
-_jitted_ddp = jax.jit(annon_ddp)
+for sampling_period, horizon in zip(Ts, N):
+    ddp_time_array = []
+    par_time_array = []
+    downsampling = 1
+    dynamics = euler(pendulum, sampling_period)
 
-_, _ = _jitted_Newton(u, x0)
-_, _ = _jitted_ddp(u, x0)
+    x0 = jnp.array([wrap_angle(0.1), -0.1])
+    key = jax.random.PRNGKey(1)
+    u = 0.1 * jax.random.normal(key, shape=(horizon, 1))
+    nonlinear_problem = OCP(dynamics, constraints, transient_cost, final_cost, total_cost)
 
-start = time.time()
-u_N, it_N = _jitted_Newton(u, x0)
-jax.block_until_ready(u_N)
-end = time.time()
-N_time = end - start
+    annon_par_Newton = lambda init_u, init_x0: par_interior_point_optimal_control(
+        nonlinear_problem, init_u, init_x0
+    )
+    annon_ddp = lambda init_u, init_x0: interior_point_ddp(
+        nonlinear_problem, init_u, init_x0
+    )
+    _jitted_Newton = jax.jit(annon_par_Newton)
+    _jitted_ddp = jax.jit(annon_ddp)
 
-start = time.time()
-u_ddp, it_ddp = _jitted_ddp(u, x0)
-jax.block_until_ready(u_ddp)
-end = time.time()
-ddp_time = end - start
+    _, _ = _jitted_Newton(u, x0)
+    _, _ = _jitted_ddp(u, x0)
+    for i in range(10):
+        print(i)
 
-print("N time  ", N_time)
-print("ddp time", ddp_time)
+        start = time.time()
+        u_N, it_N = _jitted_Newton(u, x0)
+        jax.block_until_ready(u_N)
+        end = time.time()
+        N_time = end - start
+        print("par finished")
 
-print("N iterations", it_N)
-print("ddp iterations", it_ddp)
+        start = time.time()
+        u_ddp, it_ddp = _jitted_ddp(u, x0)
+        jax.block_until_ready(u_ddp)
+        end = time.time()
+        ddp_time = end - start
+        print("seq finished")
 
-plt.plot(u_N)
-plt.plot(u_ddp)
-plt.show()
+        ddp_time_array.append(ddp_time)
+        par_time_array.append(N_time)
+
+    ddp_time_means.append(jnp.mean(jnp.array(ddp_time_array)))
+    ddp_time_medians.append(jnp.median(jnp.array(ddp_time_array)))
+    par_time_means.append(jnp.mean(jnp.array(par_time_array)))
+    par_time_medians.append(jnp.median(jnp.array(par_time_array)))
+
+seq_time_means_arr = jnp.array(ddp_time_means)
+seq_time_medians_arr = jnp.array(ddp_time_medians)
+par_time_means_arr = jnp.array(par_time_means)
+par_time_medians_arr = jnp.array(par_time_medians)
+
+df_means_ddp = pd.DataFrame(seq_time_means_arr)
+df_median_ddp = pd.DataFrame(seq_time_medians_arr)
+df_mean_par = pd.DataFrame(par_time_means_arr)
+df_median_par = pd.DataFrame(par_time_medians_arr)
+
+df_means_ddp.to_csv("pendulum_ip_means_ddp.csv")
+df_median_ddp.to_csv("pendulum_ip_medians_ddp.csv")
+df_mean_par.to_csv("pendulum_ip_means_par.csv")
+df_median_par.to_csv("pendulum_ip_medians_par.csv")
