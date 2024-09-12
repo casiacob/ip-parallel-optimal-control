@@ -4,18 +4,15 @@ from jax import config
 from noc.optimal_control_problem import OCP
 from noc.par_interior_point_newton import par_interior_point_optimal_control
 from noc.differential_dynamic_programming import interior_point_ddp
-from noc.seq_interior_point_newton import seq_log_barrier
-from noc.utils import discretize_dynamics
-from jax import lax, debug
+from noc.seq_interior_point_newton import seq_interior_point_optimal_control
 from noc.utils import wrap_angle, euler
 import time
 import pandas as pd
-import matplotlib.pyplot as plt
 
 # Enable 64 bit floating point precision
 config.update("jax_enable_x64", True)
 
-config.update("jax_platform_name", "cpu")
+config.update("jax_platform_name", "cuda")
 
 
 def constraints(state, control):
@@ -91,14 +88,17 @@ ddp_time_means = []
 ddp_time_medians = []
 par_time_means = []
 par_time_medians = []
+seq_time_means = []
+seq_time_medians = []
 
 for sampling_period, horizon in zip(Ts, N):
     ddp_time_array = []
     par_time_array = []
+    seq_time_array = []
     downsampling = 1
     dynamics = euler(cartpole, sampling_period)
 
-    x0 = jnp.array([wrap_angle(0.1), -0.1])
+    x0 = jnp.array([0.01, wrap_angle(-0.01), 0.01, -0.01])
     key = jax.random.PRNGKey(1)
     u = 0.1 * jax.random.normal(key, shape=(horizon, 1))
     nonlinear_problem = OCP(dynamics, constraints, transient_cost, final_cost, total_cost)
@@ -109,19 +109,22 @@ for sampling_period, horizon in zip(Ts, N):
     annon_ddp = lambda init_u, init_x0: interior_point_ddp(
         nonlinear_problem, init_u, init_x0
     )
-    _jitted_Newton = jax.jit(annon_par_Newton)
+    annon_seq = lambda init_u, init_x0: seq_interior_point_optimal_control(
+        nonlinear_problem, init_u, init_x0
+    )
+    _jitted_par = jax.jit(annon_par_Newton)
     _jitted_ddp = jax.jit(annon_ddp)
+    _jitted_seq = jax.jit(annon_seq)
 
-    _, _ = _jitted_Newton(u, x0)
+    _, _ = _jitted_par(u, x0)
     _, _ = _jitted_ddp(u, x0)
+    _, _ = _jitted_seq(u, x0)
     for i in range(10):
-        print(i)
-
         start = time.time()
-        u_N, it_N = _jitted_Newton(u, x0)
+        u_N, it_N = _jitted_par(u, x0)
         jax.block_until_ready(u_N)
         end = time.time()
-        N_time = end - start
+        par_time = end - start
         print("par finished")
 
         start = time.time()
@@ -129,27 +132,43 @@ for sampling_period, horizon in zip(Ts, N):
         jax.block_until_ready(u_ddp)
         end = time.time()
         ddp_time = end - start
+        print("ddp finished")
+
+        start = time.time()
+        u_seq, it_seq = _jitted_seq(u, x0)
+        jax.block_until_ready(u_seq)
+        end = time.time()
+        seq_time = end - start
         print("seq finished")
 
         ddp_time_array.append(ddp_time)
-        par_time_array.append(N_time)
+        par_time_array.append(par_time)
+        seq_time_array.append(seq_time)
 
     ddp_time_means.append(jnp.mean(jnp.array(ddp_time_array)))
     ddp_time_medians.append(jnp.median(jnp.array(ddp_time_array)))
     par_time_means.append(jnp.mean(jnp.array(par_time_array)))
     par_time_medians.append(jnp.median(jnp.array(par_time_array)))
+    seq_time_means.append(jnp.mean(jnp.array(seq_time_array)))
+    seq_time_medians.append(jnp.median(jnp.array(seq_time_array)))
 
-seq_time_means_arr = jnp.array(ddp_time_means)
-seq_time_medians_arr = jnp.array(ddp_time_medians)
+ddp_time_means_arr = jnp.array(ddp_time_means)
+ddp_time_medians_arr = jnp.array(ddp_time_medians)
 par_time_means_arr = jnp.array(par_time_means)
 par_time_medians_arr = jnp.array(par_time_medians)
+seq_time_means_arr = jnp.array(seq_time_means)
+seq_time_medians_arr = jnp.array(seq_time_medians)
 
-df_means_ddp = pd.DataFrame(seq_time_means_arr)
-df_median_ddp = pd.DataFrame(seq_time_medians_arr)
+df_means_ddp = pd.DataFrame(ddp_time_means_arr)
+df_median_ddp = pd.DataFrame(ddp_time_medians_arr)
 df_mean_par = pd.DataFrame(par_time_means_arr)
 df_median_par = pd.DataFrame(par_time_medians_arr)
+df_mean_seq = pd.DataFrame(seq_time_means_arr)
+df_median_seq = pd.DataFrame(seq_time_medians_arr)
 
 df_means_ddp.to_csv("cartpole_ip_means_ddp.csv")
 df_median_ddp.to_csv("cartpole_ip_medians_ddp.csv")
 df_mean_par.to_csv("cartpole_ip_means_par.csv")
 df_median_par.to_csv("cartpole_ip_medians_par.csv")
+df_mean_seq.to_csv("cartpole_ip_means_seq.csv")
+df_median_seq.to_csv("cartpole_ip_medians_seq.csv")
