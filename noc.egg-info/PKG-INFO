@@ -1,7 +1,0 @@
-Metadata-Version: 2.1
-Name: noc
-Version: 0.0.1
-Author: 
-Author-email: 
-Requires-Dist: jax
-Requires-Dist: matplotlib
