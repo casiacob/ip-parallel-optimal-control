@@ -6,6 +6,6 @@ setup(
     author="",
     author_email="",
     description="",
-    install_requires=["jax", "matplotlib"],
+    install_requires=["jax", "matplotlib", "pandas"],
     zip_safe=False,
 )
