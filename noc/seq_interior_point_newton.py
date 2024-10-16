@@ -177,7 +177,7 @@ def newton_oc(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray, bp: f
     return opt_x, opt_u, iterations
 
 
-def seq_log_barrier(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray):
+def seq_interior_point_optimal_control(ocp: OCP, controls: jnp.ndarray, initial_state: jnp.ndarray):
     barrier_param = 0.1
 
     def while_body(val):
