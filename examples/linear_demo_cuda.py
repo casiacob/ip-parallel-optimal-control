@@ -56,22 +56,11 @@ lqr = OCP(dynamics, constraints, stage_cost, final_cost, total_cost)
 barrier_param = 0.0
 
 reg_scheme = jnp.bool_(1.0)
-x_nonlin_rollout, u_nonlin_rollour, nonlin_rollout_iterations = (
-    par_interior_point_optimal_control(lqr, u, x0, jnp.bool_(1.0), reg_scheme)
-)
-x_N, u_N, N_iterations = par_interior_point_optimal_control(
-    lqr, u, x0, jnp.bool_(0.0), reg_scheme
-)
-x_ddp, u_ddp, ddp_iterations = interior_point_ddp(lqr, u, x0)
 
-print("nonlin rollout : ", nonlin_rollout_iterations)
+u_N, N_iterations = par_interior_point_optimal_control(
+    lqr, u, x0
+)
+
 print("N              : ", N_iterations)
-print("ddp            : ", ddp_iterations)
-plt.plot(x_nonlin_rollout[:, 0])
-plt.plot(x_N[:, 0])
-plt.plot(x_ddp[:, 0])
-plt.show()
-plt.plot(u_nonlin_rollour)
 plt.plot(u_N)
-plt.plot(u_ddp)
 plt.show()
