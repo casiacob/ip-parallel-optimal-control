@@ -196,7 +196,7 @@ def seq_interior_point_optimal_control(ocp: OCP, controls: jnp.ndarray, initial_
         while_cond, while_body, (controls, barrier_param, 0)
     )
     # jax.debug.print("converged in {x}", x=t_conv)
-    opt_x = rollout(ocp.dynamics, opt_u, initial_state)
+    # opt_x = rollout(ocp.dynamics, opt_u, initial_state)
     # optimal_cost = ocp.total_cost(opt_x, opt_u, 0.0)
     # jax.debug.print("optimal cost {x}", x=optimal_cost)
-    return opt_x, opt_u, N_iterations
+    return opt_u, N_iterations
