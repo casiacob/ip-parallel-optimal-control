@@ -1,6 +1,6 @@
 ## Jax implementation of interior point parallel optimal control
 
-## First clone and install the unconstrained paralle optimal control solver
+## First clone and install the unconstrained parallel optimal control solver
 Clone the repository:
 
 ```
